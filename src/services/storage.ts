@@ -26,7 +26,7 @@ import {
   initialBonusesPenalties,
   initialBroadcastMessages
 } from '../data/initialData';
-import { getCurrentTimeStr, getTodayShamsi, calculateGpsDistanceMeters } from '../utils/dateUtils';
+import { getCurrentTimeStr, getTodayShamsi, calculateGpsDistanceMeters, formatCurrencyTomans } from '../utils/dateUtils';
 
 const STORAGE_KEYS = {
   SETTINGS: 'mgommon_company_settings_v4',
@@ -729,19 +729,66 @@ export class StorageService {
   static submitLeaveRequest(req: Omit<LeaveRequest, 'id' | 'status' | 'createdAt' | 'companyId'> & { companyId?: string }): { success: boolean; message: string } {
     const employees = this.getAllEmployeesRaw();
     const emp = employees.find(e => e.id === req.employeeId);
-    if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
+    if (!emp) return { success: false, message: 'پرسنل در سامانه یافت نشد.' };
 
-    if (req.startDate > req.endDate) {
-      return { success: false, message: 'تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.' };
+    const settings = this.getSettings();
+
+    // Check setting for multiple pending leaves
+    if (settings.allowMultiplePendingLeaves === false) {
+      const existingPending = this.getAllLeaveRequestsRaw().some(
+        l => l.employeeId === req.employeeId && l.status === 'PENDING'
+      );
+      if (existingPending) {
+        return {
+          success: false,
+          message: 'شما در حال حاضر یک درخواست مرخصی در انتظار بررسی دارید. لطفاً تا تعیین تکلیف آن توسط مدیریت صبوری فرمایید.'
+        };
+      }
     }
 
-    if (req.type === 'EARNED' && (req.durationDays || 1) > emp.remainingLeaveDays) {
-      return { success: false, message: `مانده مرخصی شما ${emp.remainingLeaveDays} روز است.` };
+    if (!req.startDate || !req.endDate) {
+      return { success: false, message: 'تاریخ شروع و پایان مرخصی الزامی است.' };
+    }
+
+    if (req.startDate > req.endDate) {
+      return { success: false, message: 'تاریخ شروع مرخصی نمی‌تواند بعد از تاریخ پایان باشد.' };
+    }
+
+    if (req.type === 'EARNED') {
+      const days = Number(req.durationDays) || 1;
+      if (days <= 0 || !Number.isFinite(days)) {
+        return { success: false, message: 'مدت مرخصی روزانه باید حداقل ۱ روز کاری باشد.' };
+      }
+      if (days > emp.remainingLeaveDays) {
+        return {
+          success: false,
+          message: `مانده مرخصی استحقاقی شما ${emp.remainingLeaveDays} روز است و درخواست ثبت شده (${days} روز) فراتر از سقف مجاز می‌باشد.`
+        };
+      }
+    }
+
+    if (req.type === 'HOURLY') {
+      const hours = Number(req.durationHours) || 2;
+      if (hours <= 0 || !Number.isFinite(hours)) {
+        return { success: false, message: 'مدت مرخصی ساعتی باید عدد مثبت باشد.' };
+      }
+      const monthPrefix = req.startDate.substring(0, 7);
+      const usedHourlyHours = this.getAllLeaveRequestsRaw()
+        .filter(l => l.employeeId === emp.id && l.type === 'HOURLY' && l.status === 'APPROVED' && l.startDate.startsWith(monthPrefix))
+        .reduce((sum, l) => sum + (l.durationHours || 0), 0);
+
+      const maxHourly = settings.maxHourlyLeaveHoursPerMonth || 16;
+      if (usedHourlyHours + hours > maxHourly) {
+        return {
+          success: false,
+          message: `سقف مجاز مرخصی ساعتی این ماه (${maxHourly} ساعت) تکمیل خواهد شد (ساعات مصرف‌شده تاکنون: ${usedHourlyHours} ساعت).`
+        };
+      }
     }
 
     const newLeave: LeaveRequest = {
       ...req,
-      companyId: req.companyId || emp.companyId || 'comp_mgammon',
+      companyId: req.companyId || emp.companyId || settings.id || 'comp_mgommon_01',
       id: `lve_${Date.now()}`,
       status: 'PENDING',
       createdAt: getTodayShamsi()
@@ -749,8 +796,8 @@ export class StorageService {
 
     const list = this.getAllLeaveRequestsRaw();
     this.saveLeaveRequests([newLeave, ...list]);
-    this.addAuditLog('ثبت مرخصی', 'مرخصی‌ها', `درخواست مرخصی توسط ${req.employeeName}`);
-    return { success: true, message: 'درخواست مرخصی ثبت شد و به سرپرست ارسال گردید.' };
+    this.addAuditLog('ثبت مرخصی', 'مرخصی‌ها', `درخواست مرخصی ${req.type === 'HOURLY' ? 'ساعتی' : 'روزانه'} توسط ${req.employeeName}`);
+    return { success: true, message: 'درخواست مرخصی با موفقیت ثبت شد و به کارتابل مدیریت ارسال گردید.' };
   }
 
   static reviewLeaveRequest(id: string, approved: boolean, reviewerName: string, rejectionReason?: string): void {
@@ -875,22 +922,66 @@ export class StorageService {
       requestDate?: string;
     }
   ): { success: boolean; message: string } {
-    if (!req.amount || req.amount <= 0 || !req.repayMonth) {
-      return { success: false, message: 'مبلغ مساعده نامعتبر است.' };
+    if (!req.employeeId) {
+      return { success: false, message: 'شناسه پرسنل نامشخص است.' };
+    }
+
+    const employees = this.getAllEmployeesRaw();
+    const emp = employees.find(e => e.id === req.employeeId);
+    if (!emp) {
+      return { success: false, message: 'پرسنل در سامانه یافت نشد.' };
+    }
+
+    const numAmount = Number(req.amount);
+    if (!Number.isFinite(numAmount) || numAmount <= 0) {
+      return { success: false, message: 'مبلغ مساعده نامعتبر است (باید عدد معتبر و بیشتر از صفر باشد).' };
+    }
+
+    const settings = this.getSettings();
+    const maxPercent = settings.maxAdvanceSalaryPercent || 30;
+    const maxAllowed = Math.round((emp.baseSalary * maxPercent) / 100);
+
+    if (numAmount > maxAllowed) {
+      return {
+        success: false,
+        message: `حداکثر سقف مجاز مساعده ${maxPercent}٪ حقوق پایه کارگاه (${formatCurrencyTomans(maxAllowed)}) می‌باشد.`
+      };
+    }
+
+    if (!req.repayMonth || !/^\d{4}\/\d{2}$/.test(req.repayMonth)) {
+      return { success: false, message: 'دوره بازپرداخت نامعتبر است (فرمت مجاز: سال/ماه به صورت ۱۴۰۴/۰۷).' };
+    }
+
+    const list = this.getAllAdvanceRequestsRaw();
+    const existingActive = list.filter(
+      a => a.employeeId === req.employeeId && a.repayMonth === req.repayMonth && (a.status === 'PENDING' || a.status === 'APPROVED')
+    );
+    const maxPerMonth = settings.maxAdvanceRequestsPerMonth || 1;
+    if (existingActive.length >= maxPerMonth) {
+      return {
+        success: false,
+        message: `شما برای ماه ${req.repayMonth} حداکثر تعداد مجاز درخواست مساعده (${maxPerMonth} نوبت) را ثبت نموده‌اید.`
+      };
     }
 
     const newAdv: AdvanceRequest = {
       ...req,
-      companyId: req.companyId || 'comp_mgammon',
+      amount: Math.round(numAmount),
+      companyId: req.companyId || emp.companyId || settings.id || 'comp_mgammon_01',
       id: `adv_${Date.now()}`,
       status: 'PENDING',
       requestDate: req.requestDate || getTodayShamsi(),
       createdAt: req.createdAt || getTodayShamsi(),
     };
 
-    const list = this.getAllAdvanceRequestsRaw();
-    this.saveAdvanceRequests([newAdv, ...list]);
-    return { success: true, message: 'درخواست مساعده با موفقیت ثبت شد.' };
+    const list2 = this.getAllAdvanceRequestsRaw();
+    this.saveAdvanceRequests([newAdv, ...list2]);
+    this.addAuditLog(
+      'درخواست مساعده',
+      'مساعده‌ها',
+      `ثبت درخواست مساعده به مبلغ ${formatCurrencyTomans(newAdv.amount)} توسط ${emp.firstName} ${emp.lastName}`
+    );
+    return { success: true, message: 'درخواست مساعده با موفقیت ثبت شد و در انتظار تایید مدیریت است.' };
   }
 
   static reviewAdvanceRequest(id: string, approved: boolean, reviewerName: string, reason?: string): void {
@@ -967,26 +1058,38 @@ export class StorageService {
     let totalWorkedMinutes = 0;
     let totalOvertimeMins = 0;
 
-    attendance
-      .filter(a => a.employeeId === employeeId && a.date.startsWith(month))
-      .forEach(a => {
-        if (a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE') {
-          workedDaysCount++;
-          totalWorkedMinutes += (a.workDurationMinutes || 480);
-          totalOvertimeMins += (a.overtimeMinutes || 0);
-        }
-      });
+    const monthlyAtt = attendance.filter(a => a.employeeId === employeeId && a.date.startsWith(month));
+
+    monthlyAtt.forEach(a => {
+      // Include worked days and paid approved leave (ON_LEAVE)
+      if (a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE' || a.status === 'ON_LEAVE') {
+        workedDaysCount++;
+        totalWorkedMinutes += (a.workDurationMinutes || ((settings.dailyWorkHours || 8) * 60));
+        totalOvertimeMins += (a.overtimeMinutes || 0);
+      }
+    });
 
     if (workedDaysCount === 0) {
       workedDaysCount = settings.workDaysPerMonth || 22;
       totalWorkedMinutes = workedDaysCount * (settings.dailyWorkHours || 8) * 60;
     }
 
+    // Explicit absent days deduction
+    const absentDaysCount = monthlyAtt.filter(a => a.status === 'ABSENT').length;
+    const dailyBaseWage = Math.round(emp.baseSalary / (settings.workDaysPerMonth || 22));
+    const absentDeduction = absentDaysCount * dailyBaseWage;
+
+    // Effective hourly rate: if emp.hourlyRate is 0, compute from baseSalary / (workDays * dailyHours)
+    const standardDailyHours = settings.dailyWorkHours || 8;
+    const effectiveHourlyRate = emp.hourlyRate > 0
+      ? emp.hourlyRate
+      : Math.round(emp.baseSalary / ((settings.workDaysPerMonth || 22) * standardDailyHours));
+
     // Exact minute-based calculations (Fixes PAY-001 & PAY-003)
     const workedHours = Number((totalWorkedMinutes / 60).toFixed(2));
     const overtimeHours = Number((totalOvertimeMins / 60).toFixed(2));
     const overtimeMultiplier = settings.overtimeRateMultiplier || emp.overtimeRate || 1.4;
-    const overtimeAmount = Math.round((totalOvertimeMins / 60) * emp.hourlyRate * overtimeMultiplier);
+    const overtimeAmount = Math.round((totalOvertimeMins / 60) * effectiveHourlyRate * overtimeMultiplier);
 
     const approvedAdvances = advances
       .filter(a => a.employeeId === employeeId && a.status === 'APPROVED' && a.repayMonth === month)
@@ -996,16 +1099,19 @@ export class StorageService {
       .filter(b => b.employeeId === employeeId && b.type === 'BONUS' && b.month === month)
       .reduce((sum, b) => sum + b.amount, 0);
 
-    const penalties = bonusesPenalties
+    const disciplinaryPenalties = bonusesPenalties
       .filter(b => b.employeeId === employeeId && b.type === 'PENALTY' && b.month === month)
       .reduce((sum, b) => sum + b.amount, 0);
+
+    const penalties = disciplinaryPenalties + absentDeduction;
 
     const housing = Number(settings.fixedHousingAllowance) > 0 ? Number(settings.fixedHousingAllowance) : 0;
     const grocery = Number(settings.fixedGroceryAllowance) > 0 ? Number(settings.fixedGroceryAllowance) : 0;
     const child = Number(settings.childAllowance) > 0 ? Number(settings.childAllowance) : 0;
 
     const grossSalary = emp.baseSalary + overtimeAmount + bonuses + housing + grocery + child;
-    const insuranceDeduction = Math.round((emp.baseSalary + housing + grocery) * ((settings.insuranceRatePercent || 7) / 100));
+    const insuranceBase = emp.baseSalary + housing + grocery;
+    const insuranceDeduction = Math.round(insuranceBase * ((settings.insuranceRatePercent || 7) / 100));
     const taxableBase = Math.max(0, grossSalary - (settings.taxExemptionThreshold || 14000000));
     const taxDeduction = Math.round(taxableBase * ((settings.taxRatePercent || 10) / 100));
     const netSalary = Math.max(0, grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances);
@@ -1128,6 +1234,7 @@ export class StorageService {
         leaves: this.getAllLeaveRequestsRaw(),
         advances: this.getAllAdvanceRequestsRaw(),
         salaries: this.getAllSalariesRaw(),
+        bonusesPenalties: getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, initialBonusesPenalties),
         messages: this.getAllMessagesRaw(),
         auditLogs: this.getAllAuditLogsRaw(),
       }
@@ -1155,6 +1262,7 @@ export class StorageService {
       if (Array.isArray(d.leaves)) this.saveLeaveRequests(d.leaves);
       if (Array.isArray(d.advances)) this.saveAdvanceRequests(d.advances);
       if (Array.isArray(d.salaries)) this.saveSalaries(d.salaries);
+      if (Array.isArray(d.bonusesPenalties)) setItem(STORAGE_KEYS.BONUSES, d.bonusesPenalties);
       if (Array.isArray(d.messages)) this.saveMessages(d.messages);
       if (Array.isArray(d.auditLogs)) setItem(STORAGE_KEYS.AUDIT_LOGS, d.auditLogs);
 

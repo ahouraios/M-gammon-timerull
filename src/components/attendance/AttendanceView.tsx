@@ -61,8 +61,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const handlePersonalClockIn = () => {
     if (!currentEmp) return;
     const settings = StorageService.getSettings();
-    const ws = settings.workshops?.[0];
-    const coords = ws ? { lat: ws.lat, lng: ws.lng } : { lat: 36.37652, lng: 59.50812 };
+    const assignedWs = settings.workshops?.find(w => w.id === currentEmp.workshopId) || settings.workshops?.[0];
+    const coords = assignedWs ? { lat: assignedWs.lat, lng: assignedWs.lng } : { lat: 36.37652, lng: 59.50812 };
     const res = StorageService.clockIn(currentEmp.id, 'GPS', coords);
     setPersonalActionMsg({ success: res.success, text: res.message });
     onRefresh();
@@ -72,8 +72,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const handlePersonalClockOut = () => {
     if (!currentEmp) return;
     const settings = StorageService.getSettings();
-    const ws = settings.workshops?.[0];
-    const coords = ws ? { lat: ws.lat, lng: ws.lng } : { lat: 36.37652, lng: 59.50812 };
+    const assignedWs = settings.workshops?.find(w => w.id === currentEmp.workshopId) || settings.workshops?.[0];
+    const coords = assignedWs ? { lat: assignedWs.lat, lng: assignedWs.lng } : { lat: 36.37652, lng: 59.50812 };
     const res = StorageService.clockOut(currentEmp.id, 'GPS', coords);
     setPersonalActionMsg({ success: res.success, text: res.message });
     onRefresh();
@@ -169,15 +169,50 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const settings = StorageService.getSettings();
+    const emp = employees.find((e) => e.id === manualForm.employeeId);
+    const shifts = StorageService.getShifts();
+    const shift = shifts.find((s) => s.id === emp?.shiftId) || shifts[0];
+
     const existing = attendance.find(
       (a) => a.employeeId === manualForm.employeeId && a.date === manualForm.date
     );
 
     let durationMins = 0;
+    let lateMins = 0;
+    let earlyExitMins = 0;
+    let overtimeMins = 0;
+
     if (manualForm.checkInTime && manualForm.checkOutTime) {
       const [inH, inM] = manualForm.checkInTime.split(':').map(Number);
       const [outH, outM] = manualForm.checkOutTime.split(':').map(Number);
-      durationMins = Math.max(0, (outH * 60 + outM) - (inH * 60 + inM) - 60);
+      const inTotal = inH * 60 + inM;
+      const outTotal = outH * 60 + outM;
+
+      if (outTotal >= inTotal) {
+        const rawMins = outTotal - inTotal;
+        const breakMins = (rawMins >= 240 && shift?.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
+        durationMins = Math.max(0, rawMins - breakMins);
+
+        if (shift) {
+          const [startH, startM] = shift.startTime.split(':').map(Number);
+          const startTotal = startH * 60 + startM;
+          if (inTotal > startTotal + (shift.lateToleranceMinutes || 15)) {
+            lateMins = inTotal - startTotal;
+          }
+
+          // Check if Thursday
+          const isThursday = new Date().getDay() === 4;
+          const scheduledEndTime = (isThursday && shift.thursdayEndTime) ? shift.thursdayEndTime : shift.endTime;
+          const [endH, endM] = scheduledEndTime.split(':').map(Number);
+          const endTotal = endH * 60 + endM;
+
+          if (outTotal > endTotal) {
+            overtimeMins = outTotal - endTotal;
+          } else if (outTotal < endTotal - (shift.earlyExitToleranceMinutes || 10)) {
+            earlyExitMins = endTotal - outTotal;
+          }
+        }
+      }
     }
 
     const newRecord: AttendanceRecord = {
@@ -188,13 +223,14 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       checkInTime: manualForm.checkInTime,
       checkOutTime: manualForm.checkOutTime,
       workDurationMinutes: durationMins,
-      lateMinutes: 0,
-      earlyExitMinutes: 0,
-      overtimeMinutes: 0,
+      lateMinutes: lateMins,
+      earlyExitMinutes: earlyExitMins,
+      overtimeMinutes: overtimeMins,
       status: manualForm.status,
       checkInMethod: 'MANUAL',
       checkOutMethod: 'MANUAL',
-      notes: manualForm.notes || 'ثبت دستی توسط مدیریت',
+      approvalStatus: 'APPROVED',
+      notes: manualForm.notes || 'ثبت دستی تردد توسط مدیریت',
     };
 
     const updatedList = existing
@@ -205,7 +241,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     StorageService.addAuditLog(
       'ثبت تردد دستی',
       'حضور و غیاب',
-      `ثبت دستی تردد پرسنل برای تاریخ ${manualForm.date}`
+      `ثبت دستی تردد ${emp ? `${emp.firstName} ${emp.lastName}` : manualForm.employeeId} برای تاریخ ${manualForm.date} (کارکرد: ${durationMins} دقیقه)`
     );
     setIsManualModalOpen(false);
     onRefresh();

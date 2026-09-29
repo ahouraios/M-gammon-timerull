@@ -39,6 +39,7 @@ interface DatabaseSchema {
   leaves: any[];
   advances: any[];
   salaries: any[];
+  bonusesPenalties?: any[];
   auditLogs: any[];
   messages: any[];
   sessions: { [token: string]: { userId: string; createdAt: number; expiresAt: number } };
@@ -149,6 +150,7 @@ function loadInitialDb(): DatabaseSchema {
     leaves: [],
     advances: [],
     salaries: [],
+    bonusesPenalties: [],
     auditLogs: [
       {
         id: 'log_launch',
@@ -927,12 +929,25 @@ app.post('/api/advances', (req: Request, res: Response) => {
   const emp = db.employees.find(e => e.id === adv.employeeId);
   if (!emp) return res.status(404).json({ success: false, message: 'پرسنل یافت نشد.' });
 
-  // Cap advance at 50% base salary
-  const maxAllowed = Math.round(emp.baseSalary * 0.5);
+  // Cap advance based on settings (default 30% base salary)
+  const maxPercent = db.settings.maxAdvanceSalaryPercent || 30;
+  const maxAllowed = Math.round((emp.baseSalary * maxPercent) / 100);
   if (Number(adv.amount) > maxAllowed) {
     return res.status(400).json({
       success: false,
-      message: `حداکثر سقف مجاز مساعده ۵۰٪ حقوق پایه (${new Intl.NumberFormat('fa-IR').format(maxAllowed)} تومان) می‌باشد.`
+      message: `حداکثر سقف مجاز مساعده ${maxPercent}٪ حقوق پایه (${new Intl.NumberFormat('fa-IR').format(maxAllowed)} تومان) می‌باشد.`
+    });
+  }
+
+  // Monthly advance limit check
+  const existingMonthAdvances = (db.advances || []).filter(
+    (a: any) => a.employeeId === emp.id && a.repayMonth === adv.repayMonth && (a.status === 'PENDING' || a.status === 'APPROVED')
+  );
+  const maxPerMonth = db.settings.maxAdvanceRequestsPerMonth || 1;
+  if (existingMonthAdvances.length >= maxPerMonth) {
+    return res.status(400).json({
+      success: false,
+      message: `شما برای ماه ${adv.repayMonth} حداکثر تعداد مجاز درخواست مساعده (${maxPerMonth} نوبت) را ثبت نموده‌اید.`
     });
   }
 
@@ -967,6 +982,34 @@ app.post('/api/advances/review', (req: Request, res: Response) => {
   res.json({ success: true, advance: adv });
 });
 
+// Bonuses and Penalties endpoint
+app.get('/api/bonuses', (_req: Request, res: Response) => {
+  res.json(db.bonusesPenalties || []);
+});
+
+app.post('/api/bonuses', (req: Request, res: Response) => {
+  const bp = req.body;
+  if (!bp.employeeId || !bp.amount || !bp.type || !bp.title) {
+    return res.status(400).json({ success: false, message: 'اطلاعات پاداش یا جریمه ناقص است.' });
+  }
+
+  if (!db.bonusesPenalties) {
+    db.bonusesPenalties = [];
+  }
+
+  const newBp = {
+    id: `bp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    ...bp,
+    amount: Math.round(Number(bp.amount)),
+    createdAt: new Date().toISOString()
+  };
+
+  db.bonusesPenalties.unshift(newBp);
+  persistDb();
+
+  res.json({ success: true, bonusPenalty: newBp });
+});
+
 // 10. Payroll & Salary Slips with Immutable Paid Records (Fixes PAY-001..PAY-006)
 app.get('/api/salaries', (req: Request, res: Response) => {
   const user = (req as any).user;
@@ -994,44 +1037,68 @@ app.post('/api/salaries/calculate', (req: Request, res: Response) => {
 
   // Calculate based on exact minutes (Fixes PAY-001)
   const monthlyAtt = db.attendance.filter((a: any) => a.employeeId === emp.id && a.date.startsWith(month));
-  const workDaysCount = monthlyAtt.filter((a: any) => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE').length;
+  const workDaysCount = monthlyAtt.filter((a: any) => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE' || a.status === 'ON_LEAVE').length;
   const totalWorkedMinutes = monthlyAtt.reduce((sum: number, a: any) => sum + (a.workDurationMinutes || 0), 0);
   const totalOvertimeMinutes = monthlyAtt.reduce((sum: number, a: any) => sum + (a.overtimeMinutes || 0), 0);
 
   const workedHours = Number((totalWorkedMinutes / 60).toFixed(2));
   const overtimeHours = Number((totalOvertimeMinutes / 60).toFixed(2));
 
+  // Effective hourly rate: if emp.hourlyRate is 0, compute from baseSalary / (workDays * dailyHours)
+  const standardWorkDays = db.settings.workDaysPerMonth || 22;
+  const standardDailyHours = db.settings.dailyWorkHours || 8;
+  const effectiveHourlyRate = emp.hourlyRate > 0
+    ? emp.hourlyRate
+    : Math.round(emp.baseSalary / (standardWorkDays * standardDailyHours));
+
   // Multiplier from settings (Fixes PAY-003)
   const overtimeMultiplier = db.settings.overtimeRateMultiplier || emp.overtimeRate || 1.4;
-  const overtimeAmount = Math.round((totalOvertimeMinutes / 60) * (emp.hourlyRate * overtimeMultiplier));
+  const overtimeAmount = Math.round((totalOvertimeMinutes / 60) * (effectiveHourlyRate * overtimeMultiplier));
+
+  // Absent days deduction
+  const absentDaysCount = monthlyAtt.filter((a: any) => a.status === 'ABSENT').length;
+  const dailyBaseWage = Math.round(emp.baseSalary / standardWorkDays);
+  const absentDeduction = absentDaysCount * dailyBaseWage;
 
   // Advances for this month
   const approvedAdvances = db.advances
     .filter((a: any) => a.employeeId === emp.id && a.status === 'APPROVED' && a.repayMonth === month)
     .reduce((sum: number, a: any) => sum + a.amount, 0);
 
+  // Bonuses & Disciplinary Penalties
+  const bonuses = (db.bonusesPenalties || [])
+    .filter((b: any) => b.employeeId === emp.id && b.type === 'BONUS' && b.month === month)
+    .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
+
+  const disciplinaryPenalties = (db.bonusesPenalties || [])
+    .filter((b: any) => b.employeeId === emp.id && b.type === 'PENALTY' && b.month === month)
+    .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
+
+  const penalties = disciplinaryPenalties + absentDeduction;
+
   const housing = db.settings.fixedHousingAllowance || 900000;
   const grocery = db.settings.fixedGroceryAllowance || 1400000;
   const child = db.settings.childAllowance || 0;
 
-  const grossSalary = emp.baseSalary + overtimeAmount + housing + grocery + child;
-  const insuranceDeduction = Math.round(emp.baseSalary * ((db.settings.insuranceRatePercent || 7) / 100));
+  const grossSalary = emp.baseSalary + overtimeAmount + bonuses + housing + grocery + child;
+  const insuranceBase = emp.baseSalary + housing + grocery;
+  const insuranceDeduction = Math.round(insuranceBase * ((db.settings.insuranceRatePercent || 7) / 100));
   const taxable = Math.max(0, grossSalary - (db.settings.taxExemptionThreshold || 14000000));
   const taxDeduction = Math.round(taxable * ((db.settings.taxRatePercent || 10) / 100));
 
-  const netSalary = Math.max(0, grossSalary - insuranceDeduction - taxDeduction - approvedAdvances);
+  const netSalary = Math.max(0, grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances);
 
   const newSlip = {
     id: existing?.id || `sal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     employeeId: emp.id,
     month,
     baseSalary: emp.baseSalary,
-    workDays: workDaysCount || 22,
+    workDays: workDaysCount || standardWorkDays,
     workedHours,
     overtimeHours,
     overtimeAmount,
-    bonusesTotal: 0,
-    penaltiesTotal: 0,
+    bonusesTotal: bonuses,
+    penaltiesTotal: penalties,
     advancesTotal: approvedAdvances,
     insuranceDeduction,
     taxDeduction,
@@ -1109,6 +1176,7 @@ app.get('/api/backup/export', (req: Request, res: Response) => {
       leaves: db.leaves,
       advances: db.advances,
       salaries: db.salaries,
+      bonusesPenalties: db.bonusesPenalties || [],
       auditLogs: db.auditLogs,
       messages: db.messages
     }
@@ -1138,6 +1206,7 @@ app.post('/api/backup/import', (req: Request, res: Response) => {
     if (data.leaves) db.leaves = data.leaves;
     if (data.advances) db.advances = data.advances;
     if (data.salaries) db.salaries = data.salaries;
+    if (data.bonusesPenalties) db.bonusesPenalties = data.bonusesPenalties;
     if (data.messages) db.messages = data.messages;
 
     logServerAudit(user.id, user.name, 'بازیابی پشتیبان', 'پایگاه داده', `بازیابی کامل دیتابیس نسخه ${version || 'نامشخص'}`, req.ip);
