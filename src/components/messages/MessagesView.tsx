@@ -1,0 +1,545 @@
+import React, { useState } from 'react';
+import {
+  Send,
+  MessageSquare,
+  Smartphone,
+  Bell,
+  Users,
+  CheckCircle2,
+  Clock,
+  Sparkles,
+  Trash2,
+  AlertCircle,
+  Radio
+} from 'lucide-react';
+import { BroadcastMessage, Employee, User } from '../../types';
+import { StorageService } from '../../services/storage';
+import { getTodayShamsiDetailed, formatNumberFa } from '../../utils/dateUtils';
+
+interface MessagesViewProps {
+  currentUser: User;
+  employees: Employee[];
+  messages: BroadcastMessage[];
+  onRefresh: () => void;
+  canSend: boolean;
+}
+
+export const MessagesView: React.FC<MessagesViewProps> = ({
+  currentUser,
+  employees,
+  messages,
+  onRefresh,
+  canSend,
+}) => {
+  const shamsi = getTodayShamsiDetailed();
+  const settings = StorageService.getSettings();
+
+  const [recipientType, setRecipientType] = useState<'ALL' | 'WORKSHOP_1' | 'WORKSHOP_2' | 'SELECTED'>('ALL');
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
+  const [channel, setChannel] = useState<'SMS' | 'IN_APP' | 'BOTH'>('BOTH');
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+
+  const templates = [
+    {
+      title: 'یادآوری ثبت تردد با کد QR',
+      content: 'همکاران گرامی، لطفاً تردد ورود و خروج خود را صرفاً از طریق اسکن کیوسک بارکد کارگاه ثبت فرمایید.'
+    },
+    {
+      title: 'صدور فیش‌های حقوقی دوره جدید',
+      content: 'فیش‌های حقوقی ماه جاری صادر شد. همکاران محترم می‌توانند از پرتال پرسنلی نسبت به مشاهده و دریافت فایل اقدام نمایند.'
+    },
+    {
+      title: 'اطلاعیه تغییر ساعت کاری کارگاه',
+      content: 'به اطلاع می‌رساند ساعات کاری کارگاه در هفته آتی بر اساس برنامه ابلاغی جدید خواهد بود.'
+    },
+    {
+      title: 'جلسه هماهنگی ایمنی و HSE',
+      content: 'حضور کلیه پرسنل فنی در جلسه بررسی ضوابط ایمنی و تحویل تجهیزات الزامی می‌باشد.'
+    },
+  ];
+
+  const handleApplyTemplate = (tpl: { title: string; content: string }) => {
+    setTitle(tpl.title);
+    setContent(tpl.content);
+  };
+
+  const handleToggleEmployee = (empId: string) => {
+    setSelectedEmployeeIds((prev) =>
+      prev.includes(empId) ? prev.filter((id) => id !== empId) : [...prev, empId]
+    );
+  };
+
+  const getRecipientNames = (): string[] => {
+    if (recipientType === 'ALL') {
+      return ['کلیه پرسنل (عمومی)'];
+    }
+    if (recipientType === 'WORKSHOP_1') {
+      return ['کارگاه شماره یک (تولید و ماشین‌کاری)'];
+    }
+    if (recipientType === 'WORKSHOP_2') {
+      return ['کارگاه شماره دو (مونتاژ و انبار)'];
+    }
+    return employees
+      .filter((e) => selectedEmployeeIds.includes(e.id))
+      .map((e) => `${e.firstName} ${e.lastName}`);
+  };
+
+  const getRecipientCount = (): number => {
+    if (recipientType === 'ALL') return employees.length;
+    if (recipientType === 'WORKSHOP_1') {
+      return employees.filter((e) => !e.workshopId || e.workshopId === 'ws_1').length;
+    }
+    if (recipientType === 'WORKSHOP_2') {
+      return employees.filter((e) => e.workshopId === 'ws_2').length;
+    }
+    return selectedEmployeeIds.length;
+  };
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) {
+      setFeedback({ type: 'error', message: 'لطفاً عنوان و متن پیام را وارد نمایید.' });
+      return;
+    }
+    if (recipientType === 'SELECTED' && selectedEmployeeIds.length === 0) {
+      setFeedback({ type: 'error', message: 'لطفاً حداقل یک پرسنل را انتخاب نمایید.' });
+      return;
+    }
+
+    setIsSending(true);
+    setFeedback(null);
+    const recipientCount = getRecipientCount();
+    const parts = Math.ceil(content.length / 70) || 1;
+
+    setTimeout(() => {
+      const newMessage: BroadcastMessage = {
+        id: `msg_${Date.now()}`,
+        companyId: settings.id,
+        senderName: currentUser.name,
+        recipientType,
+        recipientIds: recipientType === 'SELECTED' ? selectedEmployeeIds : undefined,
+        recipientNames: getRecipientNames(),
+        title: title.trim(),
+        content: content.trim(),
+        channel,
+        sentAt: `${shamsi.dateString} - ${new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })}`,
+        status: 'DELIVERED',
+        partsCount: parts,
+      };
+
+      StorageService.addMessage(newMessage);
+      setIsSending(false);
+      setTitle('');
+      setContent('');
+      setSelectedEmployeeIds([]);
+      setFeedback({
+        type: 'success',
+        message: `پیام با موفقیت برای ${formatNumberFa(recipientCount)} نفر ارسال شد (${channel === 'SMS' ? 'پیامک مستقیم' : channel === 'IN_APP' ? 'اعلان درون برنامه‌ای' : 'پیامک و پرتال'}).`,
+      });
+      onRefresh();
+    }, 600);
+  };
+
+  const handleDeleteMessage = (id: string) => {
+    setDeletingMessageId(id);
+  };
+
+  const handleConfirmDeleteMessage = () => {
+    if (!deletingMessageId) return;
+    StorageService.deleteMessage(deletingMessageId);
+    setDeletingMessageId(null);
+    onRefresh();
+  };
+
+  const smsChars = content.length;
+  const smsParts = Math.ceil(smsChars / 70) || (smsChars > 0 ? 1 : 0);
+
+  return (
+    <div className="space-y-6 w-full max-w-full">
+      {/* Page Header */}
+      <div className="bg-white p-5 lg:p-6 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold shadow-xs">
+              <MessageSquare className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg lg:text-xl font-bold text-slate-800">
+                سامانه اطلاع‌رسانی پیامکی و پیام‌های پرتال
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                ارسال پیامک گروهی به پرسنل کارگاه‌ها و اطلاعیه‌های رسمی درون‌برنامه‌ای
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+            <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+            <span>خط اختصاصی فعال ({settings.smsSenderNumber || '500040001084'})</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Grid: Compose on Right/Top, History on Left/Bottom */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full max-w-full">
+        {/* Compose Form */}
+        <div className="lg:col-span-7 bg-white p-5 lg:p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="font-bold text-sm lg:text-base text-slate-800 flex items-center gap-2">
+              <Send className="w-4 h-4 text-indigo-600" />
+              <span>ارسال پیام جدید</span>
+            </h3>
+            <span className="text-xs text-slate-400">
+              فرستنده: <strong className="text-slate-700">{currentUser.name}</strong>
+            </span>
+          </div>
+
+          {feedback && (
+            <div
+              className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                feedback.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  : 'bg-rose-50 text-rose-800 border border-rose-200'
+              }`}
+            >
+              {feedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+              )}
+              <span>{feedback.message}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSendMessage} className="space-y-4">
+            {/* 1. Recipient Scope */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">
+                گیرندگان پیام:
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRecipientType('ALL')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border transition-all text-center cursor-pointer ${
+                    recipientType === 'ALL'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  همه پرسنل ({formatNumberFa(employees.length)})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecipientType('WORKSHOP_1')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border transition-all text-center cursor-pointer ${
+                    recipientType === 'WORKSHOP_1'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  کارگاه مرکزی
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecipientType('WORKSHOP_2')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border transition-all text-center cursor-pointer ${
+                    recipientType === 'WORKSHOP_2'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  کارگاه شماره دو
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecipientType('SELECTED')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border transition-all text-center cursor-pointer ${
+                    recipientType === 'SELECTED'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  انتخابی ({formatNumberFa(selectedEmployeeIds.length)})
+                </button>
+              </div>
+
+              {/* Multi-select employees list if SELECTED */}
+              {recipientType === 'SELECTED' && (
+                <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200 max-h-40 overflow-y-auto space-y-1.5">
+                  <div className="text-[11px] font-bold text-slate-500 mb-1">
+                    انتخاب پرسنل مورد نظر:
+                  </div>
+                  {employees.map((emp) => {
+                    const isChecked = selectedEmployeeIds.includes(emp.id);
+                    return (
+                      <label
+                        key={emp.id}
+                        className={`flex items-center justify-between p-2 rounded-lg text-xs cursor-pointer transition-colors ${
+                          isChecked ? 'bg-indigo-50 text-indigo-900 font-semibold' : 'hover:bg-white text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleEmployee(emp.id)}
+                            className="rounded text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span>
+                            {emp.firstName} {emp.lastName}
+                          </span>
+                          <span className="text-[10px] text-slate-400">({emp.position})</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-slate-500">
+                          {emp.workshopId === 'ws_2' ? 'کارگاه شماره دو' : 'کارگاه شماره یک'}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Channel Selection */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-2">
+                روش ارسال پیام:
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setChannel('BOTH')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    channel === 'BOTH'
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
+                  <Bell className="w-3.5 h-3.5 text-amber-400" />
+                  <span>پیامک + پرتال</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChannel('SMS')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    channel === 'SMS'
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>فقط پیامک (SMS)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChannel('IN_APP')}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    channel === 'IN_APP'
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Bell className="w-3.5 h-3.5 text-amber-400" />
+                  <span>اعلان درون‌برنامه‌ای</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Templates Bar */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>قالب‌های آماده:</span>
+                </label>
+                <span className="text-[10px] text-slate-400">کلیک برای درج خودکار</span>
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5">
+                {templates.map((tpl, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => handleApplyTemplate(tpl)}
+                    className="whitespace-nowrap px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-[11px] text-slate-600 transition-colors border border-slate-200/80 cursor-pointer shrink-0"
+                  >
+                    {tpl.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Title Input */}
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                موضوع / عنوان پیام
+              </label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="عنوان پیام را وارد نمایید..."
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500"
+                required
+              />
+            </div>
+
+            {/* Content Textarea */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-slate-700">
+                  متن پیام
+                </label>
+                <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                  <span>{formatNumberFa(smsChars)} کاراکتر</span>
+                  <span>|</span>
+                  <span>{formatNumberFa(smsParts)} پارت پیامک</span>
+                </div>
+              </div>
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                rows={4}
+                placeholder="متن پیام خود را بنویسید..."
+                className="w-full p-3 text-xs rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500"
+                required
+              />
+            </div>
+
+            {/* Submit Button */}
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={isSending || !canSend}
+                className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed"
+              >
+                <Send className="w-4 h-4" />
+                <span>
+                  {isSending
+                    ? 'در حال ارسال پیام...'
+                    : `ارسال نهایی برای ${formatNumberFa(getRecipientCount())} نفر`}
+                </span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* History / Sent Messages */}
+        <div className="lg:col-span-5 bg-white p-5 lg:p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="font-bold text-sm lg:text-base text-slate-800 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-slate-500" />
+              <span>تاریخچه پیام‌های ارسالی</span>
+            </h3>
+            <span className="text-xs font-mono font-bold bg-slate-100 px-2 py-0.5 rounded text-slate-600">
+              {formatNumberFa(messages.length)} پیام
+            </span>
+          </div>
+
+          <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
+            {messages.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 text-xs">
+                تاکنون پیامی ارسال نشده است.
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/60 hover:bg-white hover:shadow-xs transition-all space-y-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h4 className="font-bold text-xs text-slate-800">{msg.title}</h4>
+                      <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                        <span>ارسال توسط: {msg.senderName}</span>
+                        <span>•</span>
+                        <span>{msg.sentAt}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <CheckCircle2 className="w-3 h-3" /> ارسال موفق
+                      </span>
+                      {canSend && (
+                        <button
+                          onClick={() => handleDeleteMessage(msg.id)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                          title="حذف"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed bg-white p-2.5 rounded-lg border border-slate-100">
+                    {msg.content}
+                  </p>
+
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                    <div className="flex items-center gap-1">
+                      <Users className="w-3 h-3 text-slate-400" />
+                      <span>
+                        گیرندگان:{' '}
+                        {msg.recipientType === 'ALL'
+                          ? 'تمامی پرسنل'
+                          : msg.recipientType === 'WORKSHOP_1'
+                          ? 'کارگاه مرکزی'
+                          : msg.recipientType === 'WORKSHOP_2'
+                          ? 'کارگاه شماره دو'
+                          : msg.recipientNames?.join('، ') || 'انتخابی'}
+                      </span>
+                    </div>
+                    <span className="font-medium text-indigo-600">
+                      {msg.channel === 'BOTH' ? 'پیامک + پرتال' : msg.channel === 'SMS' ? 'پیامک' : 'پرتال'}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Delete Message Confirmation Modal */}
+      {deletingMessageId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-sm w-full border border-slate-200 p-5 space-y-4 shadow-2xl text-right">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <h3 className="text-sm font-bold text-slate-800">حذف پیام از سابقه</h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              آیا از حذف این پیام ارسالی از لیست تاریخچه سامانه اطمینان دارید؟
+            </p>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeletingMessageId(null)}
+                className="px-3.5 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteMessage}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs"
+              >
+                تایید و حذف
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
