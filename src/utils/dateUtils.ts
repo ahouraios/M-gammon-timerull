@@ -170,12 +170,26 @@ export function minutesToHoursAndMinutes(minutes: number): string {
 }
 
 // Calculate distance between two GPS coordinates in meters (Haversine formula)
+// Secures against NaN and out-of-range coords (Fixes GPS-006)
 export function calculateGpsDistanceMeters(
   lat1: number,
   lon1: number,
   lat2: number,
   lon2: number
 ): number {
+  if (
+    !Number.isFinite(lat1) ||
+    !Number.isFinite(lon1) ||
+    !Number.isFinite(lat2) ||
+    !Number.isFinite(lon2)
+  ) {
+    return Infinity;
+  }
+
+  // Latitudes must be between -90 and 90, Longitudes between -180 and 180
+  if (lat1 < -90 || lat1 > 90 || lat2 < -90 || lat2 > 90) return Infinity;
+  if (lon1 < -180 || lon1 > 180 || lon2 < -180 || lon2 > 180) return Infinity;
+
   const R = 6371e3; // Earth radius in meters
   const phi1 = (lat1 * Math.PI) / 180;
   const phi2 = (lat2 * Math.PI) / 180;
@@ -188,4 +202,72 @@ export function calculateGpsDistanceMeters(
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return Math.round(R * c);
+}
+
+/**
+ * Validates 10-digit Iranian National Code using standard Luhn-like algorithm
+ * Fixes SET-002
+ */
+export function isValidIranianNationalCode(code: string): boolean {
+  if (!code) return false;
+  const clean = code.trim().replace(/\D/g, '');
+  if (clean.length !== 10) return false;
+
+  // Disallow all identical digits like 0000000000, 1111111111, etc.
+  if (/^(\d)\1{9}$/.test(clean)) return false;
+
+  const check = parseInt(clean[9], 10);
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(clean[i], 10) * (10 - i);
+  }
+  const rem = sum % 11;
+  return (rem < 2 && check === rem) || (rem >= 2 && check === 11 - rem);
+}
+
+/**
+ * Validates Iranian mobile phone number (09xx xxx xxxx)
+ */
+export function isValidIranianPhone(phone: string): boolean {
+  if (!phone) return false;
+  const clean = phone.trim().replace(/\s|-/g, '');
+  return /^09\d{9}$/.test(clean);
+}
+
+/**
+ * Validates Iranian Sheba (IBAN) format (IR followed by 24 digits, or 24 digits)
+ */
+export function isValidSheba(sheba: string): boolean {
+  if (!sheba) return false;
+  const clean = sheba.trim().toUpperCase().replace(/\s/g, '');
+  if (/^IR\d{24}$/.test(clean)) return true;
+  if (/^\d{24}$/.test(clean)) return true;
+  return false;
+}
+
+/**
+ * Validates 16-digit Iranian bank debit card number
+ */
+export function isValidCardNumber(card: string): boolean {
+  if (!card) return false;
+  const clean = card.trim().replace(/[\s-]/g, '');
+  return /^\d{16}$/.test(clean);
+}
+
+/**
+ * Escapes CSV cell to RFC-4180 standard and protects against CSV/Excel Formula Injection
+ * Fixes REPORT-003
+ */
+export function sanitizeCsvCell(value: any): string {
+  if (value === null || value === undefined) return '""';
+  let str = String(value).trim();
+
+  // Neutralize CSV Formula Injection: cells starting with '=', '+', '-', '@', tab or carriage return
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'` + str;
+  }
+
+  // RFC 4180 escape: replace double quotes with paired double quotes and wrap in quotes
+  str = str.replace(/"/g, '""');
+  return `"${str}"`;
 }

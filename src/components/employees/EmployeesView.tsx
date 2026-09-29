@@ -32,7 +32,11 @@ import {
 import { Employee, Shift, User as AppUser, PERMISSION_LEVELS } from '../../types';
 import {
   formatCurrencyTomans,
-  getTodayShamsi
+  getTodayShamsi,
+  isValidIranianNationalCode,
+  isValidIranianPhone,
+  isValidSheba,
+  isValidCardNumber
 } from '../../utils/dateUtils';
 import { StorageService } from '../../services/storage';
 import { ShamsiDatePicker } from '../common/ShamsiDatePicker';
@@ -102,9 +106,18 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
     setNewCategoryName('');
   };
 
+  // Generate collision-resistant unique personal code (Fixes EMP-002)
+  const getNextPersonalCode = () => {
+    const maxNum = employees.reduce((max, e) => {
+      const match = e.personalCode?.match(/\d+/);
+      return match ? Math.max(max, parseInt(match[0], 10)) : max;
+    }, 1000);
+    return `EMP-${maxNum + 1}`;
+  };
+
   // Form State
   const defaultFormData: Omit<Employee, 'id' | 'companyId'> = {
-    personalCode: `EMP-${1000 + employees.length + 1}`,
+    personalCode: getNextPersonalCode(),
     firstName: '',
     lastName: '',
     nationalCode: '',
@@ -114,7 +127,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
     position: 'نیروی کارگاهی',
     workshopId: 'ws_1',
     username: '',
-    password: '123',
+    password: '',
     avatarUrl: '',
     hireDate: getTodayShamsi(),
     status: 'ACTIVE',
@@ -155,9 +168,10 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
   const handleOpenAddModal = () => {
     setEditingEmployee(null);
+    setFormError(null);
     setFormData({
       ...defaultFormData,
-      personalCode: `EMP-${1000 + employees.length + 1}`,
+      personalCode: getNextPersonalCode(),
       department: categories[2] || 'نیروی کارگاهی',
       position: 'نیروی کارگاهی',
       shiftId: shifts[0]?.id || '',
@@ -247,18 +261,79 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
     e.preventDefault();
     setFormError(null);
 
+    // 1. Basic required fields
     if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.phone.trim()) {
       setFormError('لطفاً نام، نام خانوادگی و شماره موبایل را وارد نمایید.');
       return;
     }
 
+    // 2. Validate Iranian National Code (Fixes SET-002)
+    if (!isValidIranianNationalCode(formData.nationalCode)) {
+      setFormError('کد ملی وارد شده نامعتبر است (باید ۱۰ رقم معتبر باشد).');
+      return;
+    }
+
+    // 3. National code uniqueness
+    const duplicateNational = employees.some(
+      (e) => e.nationalCode === formData.nationalCode.trim() && e.id !== editingEmployee?.id
+    );
+    if (duplicateNational) {
+      setFormError('این کد ملی قبلاً برای پرسنل دیگری ثبت شده است.');
+      return;
+    }
+
+    // 4. Validate Iranian Mobile Phone (Fixes SET-002)
+    if (!isValidIranianPhone(formData.phone)) {
+      setFormError('شماره موبایل وارد شده نامعتبر است (فرمت مجاز: 09151234567).');
+      return;
+    }
+
+    // 5. Validate Card number if entered
+    if (formData.cardNumber && !isValidCardNumber(formData.cardNumber)) {
+      setFormError('شماره کارت بانکی باید ۱۶ رقم باشد.');
+      return;
+    }
+
+    // 6. Validate Sheba number if entered
+    if (formData.shebaNumber && !isValidSheba(formData.shebaNumber)) {
+      setFormError('شماره شبا نامعتبر است (باید ۲۴ رقم با پیشوند IR باشد).');
+      return;
+    }
+
+    // 7. Validate non-negative financial rates
+    if (Number(formData.baseSalary) < 0 || Number(formData.hourlyRate) < 0) {
+      setFormError('حقوق پایه و نرخ ساعتی نمی‌توانند منفی باشند.');
+      return;
+    }
+
+    // 8. Username uniqueness check against raw users (Fixes EMP-001)
+    if (formData.username?.trim()) {
+      const cleanUsername = formData.username.trim().toLowerCase();
+      const rawUsers = StorageService.getAllUsersRaw();
+      const duplicateUser = rawUsers.some(
+        (u) => u.username.toLowerCase() === cleanUsername && u.employeeId !== editingEmployee?.id
+      );
+      if (duplicateUser) {
+        setFormError('نام کاربری وارد شده قبلاً برای حساب کاربری دیگری استفاده شده است.');
+        return;
+      }
+    }
+
     const settings = StorageService.getSettings();
+
+    // Secure initial password (Fixes AUTH-007: no hardcoded 123)
+    const initialPass = formData.password?.trim()
+      ? formData.password.trim()
+      : `M@${formData.nationalCode.slice(-4)}`;
 
     if (editingEmployee) {
       const updated: Employee = {
         ...formData,
         id: editingEmployee.id,
         companyId: editingEmployee.companyId,
+        password: initialPass,
+        baseSalary: Number(formData.baseSalary) || 0,
+        hourlyRate: Number(formData.hourlyRate) || 0,
       };
       StorageService.updateEmployee(updated);
     } else {
@@ -266,6 +341,9 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
         ...formData,
         id: `emp_${Date.now()}`,
         companyId: settings.id,
+        password: initialPass,
+        baseSalary: Number(formData.baseSalary) || 0,
+        hourlyRate: Number(formData.hourlyRate) || 0,
       };
       StorageService.addEmployee(newEmp);
     }

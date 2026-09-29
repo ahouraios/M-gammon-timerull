@@ -31,10 +31,26 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
   onRefresh,
   canManage,
 }) => {
-  const [selectedMonth, setSelectedMonth] = useState('1405/07');
+  const shamsiDetail = getTodayShamsiDetailed();
+  const currentMonthStr = shamsiDetail.dateString.substring(0, 7);
+
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
   const [viewingPayslip, setViewingPayslip] = useState<SalaryRecord | null>(null);
   const [isBonusPenaltyModalOpen, setIsBonusPenaltyModalOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  // Dynamic month list for current year
+  const persianMonthNames = [
+    'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
+    'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'
+  ];
+  const monthOptions = Array.from({ length: 12 }, (_, i) => {
+    const m = (i + 1).toString().padStart(2, '0');
+    return {
+      value: `${shamsiDetail.year}/${m}`,
+      label: `${persianMonthNames[i]} ${shamsiDetail.year}${`${shamsiDetail.year}/${m}` === currentMonthStr ? ' (دوره جاری)' : ''}`
+    };
+  }).reverse();
 
   // Bonus or penalty form
   const [bpForm, setBpForm] = useState({
@@ -43,7 +59,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
     amount: 1500000,
     title: '',
     description: '',
-    month: '1405/07',
+    month: currentMonthStr,
   });
 
   const filteredSalaries = salaries.filter((s) => {
@@ -187,13 +203,11 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
             onChange={(e) => setSelectedMonth(e.target.value)}
             className="text-xs rounded-lg border border-slate-200 py-1.5 px-3 bg-white text-slate-800 font-bold focus:outline-none"
           >
-            <option value="1405/07">مهر ۱۴۰۵ (دوره جاری)</option>
-            <option value="1405/06">شهریور ۱۴۰۵ (تسویه شده)</option>
-            <option value="1405/05">مرداد ۱۴۰۵</option>
-            <option value="1405/04">تیر ۱۴۰۵</option>
-            <option value="1405/03">خرداد ۱۴۰۵</option>
-            <option value="1405/02">اردیبهشت ۱۴۰۵</option>
-            <option value="1405/01">فروردین ۱۴۰۵</option>
+            {monthOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
         <span className="text-xs font-bold text-slate-700">

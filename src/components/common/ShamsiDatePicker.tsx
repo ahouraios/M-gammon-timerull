@@ -129,7 +129,8 @@ export const ShamsiDatePicker: React.FC<ShamsiDatePickerProps> = ({
     setIsOpen(false);
   };
 
-  const years = Array.from({ length: 16 }, (_, i) => 1395 + i);
+  // Dynamic 25-year window centered around current year (Fixes UX-001)
+  const years = Array.from({ length: 25 }, (_, i) => parsedToday.y - 12 + i);
 
   return (
     <div className={`relative ${className}`} ref={containerRef}>

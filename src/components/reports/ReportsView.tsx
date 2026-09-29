@@ -40,6 +40,7 @@ import {
   formatCurrencyTomans,
   formatNumberFa,
   getTodayShamsi,
+  sanitizeCsvCell,
 } from '../../utils/dateUtils';
 import { StorageService } from '../../services/storage';
 
@@ -60,7 +61,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   advances = [],
   settings,
 }) => {
+  const todayShamsi = getTodayShamsi();
+  const currentMonthShamsi = todayShamsi.substring(0, 7);
+
   const [reportType, setReportType] = useState<'ALL' | 'DAILY' | 'MONTHLY'>('MONTHLY');
+  const [selectedReportMonth, setSelectedReportMonth] = useState(currentMonthShamsi);
+  const [selectedReportDate, setSelectedReportDate] = useState(todayShamsi);
   const [selectedDept, setSelectedDept] = useState('ALL');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('ALL');
   const [activeReportTab, setActiveReportTab] = useState<'SUMMARY' | 'ATTENDANCE_LOGS' | 'LEAVES_ADVANCES'>('SUMMARY');
@@ -87,11 +93,20 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return employees.find((e) => e.id === selectedEmployeeId) || null;
   }, [employees, selectedEmployeeId]);
 
-  // Relevant attendance records
+  // Relevant attendance records filtered strictly by reportType and date scope (Fixes REPORT-001 & REPORT-005)
   const relevantAttendance = useMemo(() => {
     const validEmpIds = new Set(filteredEmployees.map((e) => e.id));
-    return attendance.filter((a) => validEmpIds.has(a.employeeId));
-  }, [filteredEmployees, attendance]);
+    return attendance.filter((a) => {
+      if (!validEmpIds.has(a.employeeId)) return false;
+      if (reportType === 'DAILY') {
+        return a.date === selectedReportDate;
+      }
+      if (reportType === 'MONTHLY') {
+        return a.date.startsWith(selectedReportMonth);
+      }
+      return true;
+    });
+  }, [filteredEmployees, attendance, reportType, selectedReportDate, selectedReportMonth]);
 
   // Summary Metrics calculated dynamically
   const totalEmployeesCount = filteredEmployees.length;
@@ -100,32 +115,33 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const totalOvertimeMinutes = relevantAttendance.reduce((sum, a) => sum + (a.overtimeMinutes || 0), 0);
   const totalPresentCount = relevantAttendance.filter((a) => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE').length;
 
-  // Chart data grouped by department
+  // Chart data grouped by department (Fixes REPORT-002 & REPORT-004)
   const deptSummaryData = useMemo(() => {
     const depts = departments.filter((d) => d !== 'ALL');
-    if (depts.length === 0) {
-      return [{ name: 'تولید و کارگاه', حاضر: 100, تاخیر: 0, اضافه‌کار: 0 }];
+    if (depts.length === 0 || employees.length === 0) {
+      return []; // Return empty array on empty data without fake 100% attendance!
     }
     return depts.map((deptName) => {
       const empsInDept = employees.filter((e) => e.department === deptName);
       const empIds = new Set(empsInDept.map((e) => e.id));
-      const attInDept = attendance.filter((a) => empIds.has(a.employeeId));
+      const attInDept = relevantAttendance.filter((a) => empIds.has(a.employeeId));
       const latesCount = attInDept.filter((a) => (a.lateMinutes || 0) > 0).length;
-      const totalAtt = attInDept.length || 1;
-      const presentRate = Math.min(100, Math.round(((totalAtt - latesCount) / totalAtt) * 100));
-      const lateRate = Math.min(100, Math.round((latesCount / totalAtt) * 100));
+      const totalAtt = attInDept.length;
+      const presentCount = attInDept.filter((a) => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE').length;
+      const presentRate = totalAtt > 0 ? Math.round((presentCount / totalAtt) * 100) : 0;
+      const lateRate = totalAtt > 0 ? Math.round((latesCount / totalAtt) * 100) : 0;
       const overtimeHours = Math.round(attInDept.reduce((s, a) => s + (a.overtimeMinutes || 0), 0) / 60);
 
       return {
         name: deptName,
-        حاضر: presentRate || 100,
-        تاخیر: lateRate || 0,
-        'اضافه‌کار': overtimeHours || 0,
+        حاضر: presentRate,
+        تاخیر: lateRate,
+        'اضافه‌کار': overtimeHours,
       };
     });
-  }, [departments, employees, attendance]);
+  }, [departments, employees, relevantAttendance]);
 
-  // Export 1: All Employees Summary CSV (Excel UTF-8 BOM)
+  // Export 1: All Employees Summary CSV (Excel UTF-8 BOM, RFC-4180, Formula-Sanitized - Fixes REPORT-003 & REPORT-005)
   const exportAllEmployeesToCsv = () => {
     const headers = [
       'کد پرسنلی',
@@ -145,7 +161,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     ];
 
     const rows = filteredEmployees.map((e) => {
-      const empAtt = attendance.filter((a) => a.employeeId === e.id);
+      // Scoped to selected date/month! (Fixes REPORT-005)
+      const empAtt = relevantAttendance.filter((a) => a.employeeId === e.id);
       const empLeaves = leaves.filter((l) => l.employeeId === e.id && l.status === 'APPROVED');
       const empAdvances = advances.filter((adv) => adv.employeeId === e.id && adv.status === 'APPROVED');
 
@@ -154,32 +171,33 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       const leaveDays = empLeaves.reduce((s, l) => s + (l.durationDays || 1), 0);
       const advTotal = empAdvances.reduce((s, a) => s + (a.amount || 0), 0);
 
+      // Safe CSV cells (Fixes REPORT-003)
       return [
-        `"${e.personalCode}"`,
-        `"${e.firstName} ${e.lastName}"`,
-        `"${e.nationalCode || ''}"`,
-        `"${e.phone || ''}"`,
-        `"${e.department}"`,
-        `"${e.position}"`,
-        `"${e.workshopId === 'ws_2' ? 'کارگاه ۲' : 'کارگاه ۱ (مشهد)'}"`,
-        e.baseSalary,
-        empAtt.length,
-        lateMins,
-        otHours,
-        leaveDays,
-        advTotal,
-        e.status === 'ACTIVE' ? 'فعال' : 'غیرفعال'
+        sanitizeCsvCell(e.personalCode),
+        sanitizeCsvCell(`${e.firstName} ${e.lastName}`),
+        sanitizeCsvCell(e.nationalCode || ''),
+        sanitizeCsvCell(e.phone || ''),
+        sanitizeCsvCell(e.department),
+        sanitizeCsvCell(e.position),
+        sanitizeCsvCell(e.workshopId === 'ws_2' ? 'کارگاه ۲' : 'کارگاه ۱ (مشهد)'),
+        sanitizeCsvCell(e.baseSalary),
+        sanitizeCsvCell(empAtt.length),
+        sanitizeCsvCell(lateMins),
+        sanitizeCsvCell(otHours),
+        sanitizeCsvCell(leaveDays),
+        sanitizeCsvCell(advTotal),
+        sanitizeCsvCell(e.status === 'ACTIVE' ? 'فعال' : 'غیرفعال')
       ];
     });
 
     const csvContent =
       '\uFEFF' +
-      [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+      [headers.map(sanitizeCsvCell).join(','), ...rows.map((row) => row.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `MGAMMON_All_Employees_Report_${getTodayShamsi().replace(/\//g, '_')}.csv`);
+    link.setAttribute('download', `MGAMMON_Report_${reportType}_${getTodayShamsi().replace(/\//g, '_')}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -187,7 +205,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   // Export 2: Individual Employee Detailed Logs CSV
   const exportIndividualEmployeeCsv = (emp: Employee) => {
-    const empAtt = attendance.filter((a) => a.employeeId === emp.id);
+    // Scoped to selected date/month! (Fixes REPORT-005)
+    const empAtt = relevantAttendance.filter((a) => a.employeeId === emp.id);
     const headers = [
       'تاریخ',
       'کد پرسنلی',
@@ -204,23 +223,23 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     ];
 
     const rows = empAtt.map((a) => [
-      `"${a.date}"`,
-      `"${emp.personalCode}"`,
-      `"${emp.firstName} ${emp.lastName}"`,
-      `"${a.checkInTime || '-'}"`,
-      `"${a.checkOutTime || '-'}"`,
-      a.workDurationMinutes || 0,
-      a.lateMinutes || 0,
-      a.earlyExitMinutes || 0,
-      a.overtimeMinutes || 0,
-      `"${a.status === 'PRESENT' ? 'حاضر' : a.status === 'LATE' ? 'با تاخیر' : a.status === 'ABSENT' ? 'غایب' : a.status}"`,
-      `"${a.checkInMethod || 'سیستمی'}"`,
-      `"${(a.notes || '').replace(/"/g, '""')}"`
+      sanitizeCsvCell(a.date),
+      sanitizeCsvCell(emp.personalCode),
+      sanitizeCsvCell(`${emp.firstName} ${emp.lastName}`),
+      sanitizeCsvCell(a.checkInTime || '-'),
+      sanitizeCsvCell(a.checkOutTime || '-'),
+      sanitizeCsvCell(a.workDurationMinutes || 0),
+      sanitizeCsvCell(a.lateMinutes || 0),
+      sanitizeCsvCell(a.earlyExitMinutes || 0),
+      sanitizeCsvCell(a.overtimeMinutes || 0),
+      sanitizeCsvCell(a.status === 'PRESENT' ? 'حاضر' : a.status === 'LATE' ? 'با تاخیر' : a.status === 'ABSENT' ? 'غایب' : a.status),
+      sanitizeCsvCell(a.checkInMethod || 'سیستمی'),
+      sanitizeCsvCell(a.notes || '')
     ]);
 
     const csvContent =
       '\uFEFF' +
-      [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+      [headers.map(sanitizeCsvCell).join(','), ...rows.map((row) => row.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -237,6 +256,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   // Export 3: Complete Database JSON Backup
   const handleExportFullBackup = () => {
     const jsonStr = StorageService.exportFullBackup();
+    if (!jsonStr) return;
     const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

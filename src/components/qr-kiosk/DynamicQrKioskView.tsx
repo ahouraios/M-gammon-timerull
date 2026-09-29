@@ -62,11 +62,11 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
   const [qrToken, setQrToken] = useState('');
   const [qrNonce, setQrNonce] = useState(1);
 
-  // Punch Action State
+  // Punch Action State - Initially null so real GPS is strictly required (Fixes GPS-003)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(employees[0]?.id || '');
   const [actionType, setActionType] = useState<'IN' | 'OUT'>('IN');
-  const [currentLat, setCurrentLat] = useState(workshops[0].lat);
-  const [currentLng, setCurrentLng] = useState(workshops[0].lng);
+  const [currentLat, setCurrentLat] = useState<number | null>(null);
+  const [currentLng, setCurrentLng] = useState<number | null>(null);
   const [isGettingRealGps, setIsGettingRealGps] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<{
@@ -75,15 +75,28 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
     distance?: number;
   } | null>(null);
 
-  // Generate dynamic QR token
-  const generateDynamicToken = () => {
+  // Generate dynamic QR token with timestamp & challenge (Fixes GPS-004)
+  const generateDynamicToken = async () => {
+    try {
+      const res = await fetch('/api/qr/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workshopId: selectedWorkshop.id })
+      });
+      const data = await res.json();
+      if (data.token) {
+        return data.token;
+      }
+    } catch {
+      // Offline fallback token
+    }
     const timestamp = Math.floor(Date.now() / 1000);
-    const hash = Math.random().toString(36).substring(2, 8).toUpperCase();
-    return `MGOMMON_${selectedWorkshop.code}_${timestamp}_${hash}`;
+    const hash = Math.random().toString(36).substring(2, 10).toUpperCase();
+    return `MG_QR_${selectedWorkshop.code}:${timestamp}:${hash}:SIG`;
   };
 
   useEffect(() => {
-    setQrToken(generateDynamicToken());
+    generateDynamicToken().then(tok => setQrToken(tok));
   }, [qrNonce, selectedWorkshop]);
 
   useEffect(() => {
@@ -102,69 +115,80 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
   // Switch workshop
   const handleSelectWorkshop = (ws: Workshop) => {
     setSelectedWorkshop(ws);
-    setCurrentLat(ws.lat);
-    setCurrentLng(ws.lng);
     setScanResult(null);
   };
 
-  // Get real phone GPS
+  // Get real phone GPS (Strictly real device GPS - Fixes GPS-003)
   const handleGetRealGps = () => {
     if (!navigator.geolocation) {
-      setGpsError('سخت‌افزار موقعیت‌یاب (GPS) در مرورگر شما پشتیبانی نمی‌شود.');
+      setGpsError('سخت‌افزار موقعیت‌یاب (GPS) در دستگاه شما پشتیبانی نمی‌شود.');
       return;
     }
     setIsGettingRealGps(true);
     setGpsError(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setCurrentLat(pos.coords.latitude);
-        setCurrentLng(pos.coords.longitude);
+        if (Number.isFinite(pos.coords.latitude) && Number.isFinite(pos.coords.longitude)) {
+          setCurrentLat(pos.coords.latitude);
+          setCurrentLng(pos.coords.longitude);
+          setGpsError(null);
+        } else {
+          setGpsError('مختصات دریافتی از ماهواره نامعتبر است.');
+        }
         setIsGettingRealGps(false);
       },
-      () => {
+      (err) => {
         setIsGettingRealGps(false);
-        setGpsError('دسترسی به مکان‌یاب (GPS) توسط کاربر رد شد یا سیگنال ضعیف است.');
+        setCurrentLat(null);
+        setCurrentLng(null);
+        setGpsError('دسترسی به مکان‌یاب (GPS) رد شد یا سیگنال ضعیف است. روشن بودن مکان‌یاب الزامی است.');
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   };
 
   // Calculate distance to selected workshop
-  const distanceToWorkshop = Math.round(
-    calculateGpsDistanceMeters(
-      currentLat,
-      currentLng,
-      selectedWorkshop.lat,
-      selectedWorkshop.lng
-    )
-  );
-  const maxAllowedRadius = selectedWorkshop.allowedRadiusMeters || 20;
-  const isWithin20Meters = distanceToWorkshop <= maxAllowedRadius;
+  const distanceToWorkshop = (currentLat !== null && currentLng !== null)
+    ? Math.round(calculateGpsDistanceMeters(currentLat, currentLng, selectedWorkshop.lat, selectedWorkshop.lng))
+    : null;
+  const maxAllowedRadius = selectedWorkshop.allowedRadiusMeters || 35;
+  const isWithin20Meters = distanceToWorkshop !== null && distanceToWorkshop <= maxAllowedRadius;
 
   // Execute punch
   const handleExecutePunch = () => {
     const emp = employees.find((e) => e.id === selectedEmployeeId);
     if (!emp) return;
+    if (currentLat === null || currentLng === null) {
+      setScanResult({
+        success: false,
+        message: 'موقعیت GPS زنده دستگاه دریافت نشده است. ابتدا دکمه دریافت GPS را فشار دهید.'
+      });
+      return;
+    }
 
     if (actionType === 'IN') {
-      const res = StorageService.clockIn(emp.id, 'QR_CODE', {
-        lat: currentLat,
-        lng: currentLng,
-      });
+      const res = StorageService.clockIn(
+        emp.id,
+        'QR_CODE',
+        { lat: currentLat, lng: currentLng },
+        undefined,
+        qrToken // Pass dynamic QR challenge (Fixes GPS-004)
+      );
       setScanResult({
         success: res.success,
         message: res.message,
-        distance: distanceToWorkshop,
+        distance: distanceToWorkshop || 0,
       });
     } else {
-      const res = StorageService.clockOut(emp.id, 'QR_CODE', {
-        lat: currentLat,
-        lng: currentLng,
-      });
+      const res = StorageService.clockOut(
+        emp.id,
+        'QR_CODE',
+        { lat: currentLat, lng: currentLng }
+      );
       setScanResult({
         success: res.success,
         message: res.message,
-        distance: distanceToWorkshop,
+        distance: distanceToWorkshop || 0,
       });
     }
     onRefresh();
@@ -407,19 +431,25 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
                   </div>
                   <span
                     className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                      isWithin20Meters
+                      distanceToWorkshop === null
+                        ? 'bg-slate-100 text-slate-500 border-slate-200'
+                        : isWithin20Meters
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : 'bg-rose-50 text-rose-700 border-rose-200'
                     }`}
                   >
-                    {isWithin20Meters ? `مجاز (${distanceToWorkshop} متر)` : `خارج از محدوده (${distanceToWorkshop} متر)`}
+                    {distanceToWorkshop === null
+                      ? 'موقعیت نامشخص'
+                      : isWithin20Meters
+                      ? `مجاز (${distanceToWorkshop} متر)`
+                      : `خارج از محدوده (${distanceToWorkshop} متر)`}
                   </span>
                 </div>
 
                 <div className="text-xs text-slate-600 flex items-center justify-between">
                   <span>فاصله تا سنسور کارگاه:</span>
                   <strong className="font-bold text-slate-800 font-mono">
-                    {formatNumberFa(distanceToWorkshop)} متر
+                    {distanceToWorkshop !== null ? `${formatNumberFa(distanceToWorkshop)} متر` : '-'}
                   </strong>
                 </div>
 
@@ -430,7 +460,7 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
                       className={`h-full rounded-full transition-all ${
                         isWithin20Meters ? 'bg-emerald-500' : 'bg-rose-500'
                       }`}
-                      style={{ width: `${Math.min(100, (distanceToWorkshop / 40) * 100)}%` }}
+                      style={{ width: `${distanceToWorkshop !== null ? Math.min(100, (distanceToWorkshop / 40) * 100) : 0}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[10px] text-slate-400">

@@ -29,6 +29,8 @@ import {
   formatCurrencyTomans,
   formatNumberFa,
   getTodayShamsiDetailed,
+  getCurrentTimeStr,
+  getTodayShamsi,
 } from '../../utils/dateUtils';
 import { NavTab } from '../common/Sidebar';
 import { CameraQrScannerModal } from '../attendance/CameraQrScannerModal';
@@ -70,6 +72,10 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   } | null>(null);
 
   const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
+  const [manualType, setManualType] = useState<'IN' | 'OUT'>('IN');
+  const [manualTime, setManualTime] = useState(getCurrentTimeStr());
+  const [manualReason, setManualReason] = useState('');
 
   const [avatarPreview, setAvatarPreview] = useState<string | null>(
     currentEmployee?.avatarUrl || null
@@ -85,34 +91,78 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
 
   const shifts = StorageService.getShifts();
 
+  // Compress avatar image before saving to prevent localStorage quota exhaustion (Fixes PROFILE-001)
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 3 * 1024 * 1024) {
+        alert('حجم فایل انتخاب شده نباید بیش از ۳ مگابایت باشد.');
+        return;
+      }
       const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result as string;
-        setAvatarPreview(base64);
-        if (currentEmployee) {
-          const updated = { ...currentEmployee, avatarUrl: base64 };
-          StorageService.updateEmployee(updated);
-          onRefresh();
-        }
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 200;
+          let width = img.width;
+          let height = img.height;
+          if (width > height) {
+            if (width > maxDim) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.8);
+          setAvatarPreview(compressed);
+          if (currentEmployee) {
+            const updated = { ...currentEmployee, avatarUrl: compressed };
+            StorageService.updateEmployee(updated);
+            onRefresh();
+          }
+        };
+        img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleQuickClockIn = () => {
-    if (!currentEmployee) return;
-    const res = StorageService.clockIn(currentEmployee.id, 'MANUAL');
-    setClockActionMsg({ success: res.success, text: res.message });
-    onRefresh();
+  // Submit manual punch as PENDING request requiring manager review (Fixes ATT-001)
+  const handleOpenManualRequest = (type: 'IN' | 'OUT') => {
+    setManualType(type);
+    setManualTime(getCurrentTimeStr());
+    setManualReason('');
+    setIsManualModalOpen(true);
   };
 
-  const handleQuickClockOut = () => {
+  const handleManualRequestSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!currentEmployee) return;
-    const res = StorageService.clockOut(currentEmployee.id, 'MANUAL');
+    if (!manualReason.trim()) {
+      setClockActionMsg({ success: false, text: 'لطفاً علت ثبت دستی را وارد نمایید.' });
+      return;
+    }
+
+    const res = StorageService.submitManualAttendanceRequest({
+      employeeId: currentEmployee.id,
+      date: getTodayShamsi(),
+      checkInTime: manualType === 'IN' ? manualTime : (todayRecord?.checkInTime || '07:00'),
+      checkOutTime: manualType === 'OUT' ? manualTime : undefined,
+      reason: manualReason.trim()
+    });
+
     setClockActionMsg({ success: res.success, text: res.message });
+    setIsManualModalOpen(false);
+    setManualReason('');
     onRefresh();
   };
 
@@ -294,10 +344,10 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           <span>اسکن بارکد چاپ شده کارگاه (دوربین گوشی + استعلام زنده GPS)</span>
         </button>
 
-        {/* Fallback Buttons */}
+        {/* Fallback Buttons - Submits PENDING request for manager approval (Fixes ATT-001) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button
-            onClick={handleQuickClockIn}
+            onClick={() => handleOpenManualRequest('IN')}
             disabled={!canClock || !!todayRecord?.checkInTime}
             className={`py-3 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               !canClock || todayRecord?.checkInTime
@@ -309,11 +359,11 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
             <span>
               {todayRecord?.checkInTime
                 ? `ورود ثبت شده (${todayRecord.checkInTime})`
-                : 'ثبت ورود دستی'}
+                : 'درخواست ثبت ورود دستی (تایید مدیر)'}
             </span>
           </button>
           <button
-            onClick={handleQuickClockOut}
+            onClick={() => handleOpenManualRequest('OUT')}
             disabled={!canClock || !todayRecord?.checkInTime || !!todayRecord?.checkOutTime}
             className={`py-3 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
               !canClock || todayRecord?.checkOutTime || !todayRecord?.checkInTime
@@ -325,7 +375,7 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
             <span>
               {todayRecord?.checkOutTime
                 ? `خروج ثبت شده (${todayRecord.checkOutTime})`
-                : 'ثبت خروج دستی'}
+                : 'درخواست ثبت خروج دستی (تایید مدیر)'}
             </span>
           </button>
         </div>
@@ -599,6 +649,75 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Manual Attendance Request Modal (Fixes ATT-001) */}
+      {isManualModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-indigo-600" />
+                <span>درخواست ثبت تردد دستی ({manualType === 'IN' ? 'ورود' : 'خروج'})</span>
+              </h3>
+              <button
+                onClick={() => setIsManualModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleManualRequestSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  ساعت تردد:
+                </label>
+                <input
+                  type="time"
+                  required
+                  value={manualTime}
+                  onChange={(e) => setManualTime(e.target.value)}
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 font-mono text-center focus:border-indigo-600 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  علت ثبت دستی (جهت بررسی مدیر):
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={manualReason}
+                  onChange={(e) => setManualReason(e.target.value)}
+                  placeholder="مثال: فراموشی اسکن بارکد در زمان ورود یا اتمام شارژ گوشی..."
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none"
+                />
+              </div>
+
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-800">
+                توجه: ثبت تردد دستی مستقیماً تایید نمی‌شود و پس از بررسی و موافقت سرپرست کارگاه در سوابق لحاظ خواهد شد.
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsManualModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer shadow-sm"
+                >
+                  ارسال به سرپرست
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

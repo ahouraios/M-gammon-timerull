@@ -172,52 +172,19 @@ export const Header: React.FC<HeaderProps> = ({
     e.preventDefault();
     setAuthError(null);
     setAuthSuccess(null);
-    const user = users.find(
-      (u) =>
-        (u.username.toLowerCase() === loginUsername.trim().toLowerCase() ||
-          u.email.toLowerCase() === loginUsername.trim().toLowerCase()) &&
-        (u.password === loginPassword.trim() || loginPassword.trim() === '123' || loginPassword.trim() === '123456')
-    );
-    if (user) {
-      setAuthSuccess(`خوش آمدید، ${user.name}`);
+    const res = StorageService.authenticate(loginUsername, loginPassword);
+    if (res.success && res.user) {
+      setAuthSuccess(`خوش آمدید، ${res.user.name}`);
       setTimeout(() => {
-        onUserChange(user);
+        onUserChange(res.user!);
         setIsLoginModalOpen(false);
         setAuthSuccess(null);
         setLoginUsername('');
         setLoginPassword('');
       }, 500);
     } else {
-      setAuthError('نام کاربری یا رمز عبور اشتباه است.');
+      setAuthError(res.message || 'نام کاربری یا رمز عبور اشتباه است.');
     }
-  };
-
-  const handleBiometricLogin = () => {
-    setIsProcessingBiometric(true);
-    setAuthError(null);
-    setAuthSuccess(null);
-    setTimeout(() => {
-      setIsProcessingBiometric(false);
-      const empUser = users.find((u) => u.role === 'EMPLOYEE') || users[0];
-      setAuthSuccess(`ورود بیومتریک تایید شد: ${empUser.name}`);
-      setTimeout(() => {
-        onUserChange(empUser);
-        setIsLoginModalOpen(false);
-        setAuthSuccess(null);
-      }, 600);
-    }, 1200);
-  };
-
-  const handleGoogleLogin = () => {
-    setAuthSuccess(null);
-    setAuthError(null);
-    const gUser = users.find((u) => u.email.includes('mgommon')) || users[0];
-    setAuthSuccess(`اتصال سازمانی گوگل تایید شد: ${gUser.email}`);
-    setTimeout(() => {
-      onUserChange(gUser);
-      setIsLoginModalOpen(false);
-      setAuthSuccess(null);
-    }, 600);
   };
 
   return (
@@ -307,26 +274,6 @@ export const Header: React.FC<HeaderProps> = ({
 
             <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block" />
 
-            {/* Quick Return to Admin Button if currently logged in as Employee or Manager */}
-            {(() => {
-              const adminUser = users.find((u) => u.role === 'ADMIN');
-              if (adminUser && currentUser.role !== 'ADMIN') {
-                return (
-                  <button
-                    type="button"
-                    onClick={() => onUserChange(adminUser)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
-                    title="بازگشت به پنل مدیریت ارشد"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">بازگشت به حساب مدیریت</span>
-                    <span className="sm:hidden">مدیریت</span>
-                  </button>
-                );
-              }
-              return null;
-            })()}
-
             {/* Switch User / Role Dropdown */}
             <div className="relative">
               <button
@@ -374,81 +321,6 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
                   </div>
 
-                  {/* Return to Admin Button if currently in Employee account */}
-                  {(() => {
-                    const adminUser = users.find((u) => u.role === 'ADMIN');
-                    if (adminUser && currentUser.role !== 'ADMIN') {
-                      return (
-                        <div className="p-2 border-b border-slate-100 bg-amber-50/60">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onUserChange(adminUser);
-                              setDropdownOpen(false);
-                            }}
-                            className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 text-amber-300" />
-                            <span>بازگشت به حساب مدیر ارشد ({adminUser.name})</span>
-                          </button>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-
-                  {/* User Switcher List (Always accessible for testing and switching) */}
-                  {users.length > 1 ? (
-                    <>
-                      <div className="px-3 py-1.5 text-[10px] text-slate-400 font-semibold">
-                        سوییچ بین حساب‌های کاربری فعال:
-                      </div>
-                      <div className="p-1.5 space-y-1 max-h-52 overflow-y-auto">
-                        {users.map((u) => {
-                          const isSelected = u.id === currentUser.id;
-                          return (
-                            <button
-                              key={u.id}
-                              onClick={() => {
-                                onUserChange(u);
-                                setDropdownOpen(false);
-                              }}
-                              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs text-right transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-indigo-50 text-indigo-950 font-semibold border border-indigo-100'
-                                  : 'hover:bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2 truncate">
-                                <div
-                                  className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold text-[10px] shrink-0 overflow-hidden ${
-                                    isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'
-                                  }`}
-                                >
-                                  {u.avatarUrl ? (
-                                    <img src={u.avatarUrl} alt={u.name} className="w-full h-full object-cover" />
-                                  ) : (
-                                    u.name.charAt(0)
-                                  )}
-                                </div>
-                                <div className="truncate">
-                                  <div className="text-[11px] text-slate-800 font-medium truncate">{u.name}</div>
-                                  <div className="text-[9px] text-slate-400 font-mono">{u.username}</div>
-                                </div>
-                              </div>
-                              <div className="shrink-0">{getRoleBadge(u.role)}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="px-3.5 py-2 text-xs text-slate-500">
-                      حساب فعال: <strong className="text-slate-800 font-bold">مجید نورایی (مدیر ارشد)</strong>
-                    </div>
-                  )}
-
                   {/* Actions in Dropdown */}
                   <div className="p-2 border-t border-slate-100 space-y-1.5">
                     <button
@@ -471,10 +343,10 @@ export const Header: React.FC<HeaderProps> = ({
                         setDropdownOpen(false);
                         setIsLoginModalOpen(true);
                       }}
-                      className="w-full py-2 px-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                      className="w-full py-2 px-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors border border-slate-200"
                     >
-                      <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>ورود مستقیم با رمز / بیومتریک</span>
+                      <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                      <span>ورود با حساب کاربری دیگر</span>
                     </button>
 
                     {onLogout && (
@@ -522,44 +394,8 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             </div>
 
-            {/* Methods Tabs */}
+            {/* Login Form Body */}
             <div className="p-6 space-y-4">
-              <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setLoginMethod('PASSWORD')}
-                  className={`py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    loginMethod === 'PASSWORD'
-                      ? 'bg-white text-indigo-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  رمز عبور
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLoginMethod('FINGERPRINT')}
-                  className={`py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    loginMethod === 'FINGERPRINT'
-                      ? 'bg-white text-indigo-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  اثر انگشت
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLoginMethod('GOOGLE')}
-                  className={`py-2 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    loginMethod === 'GOOGLE'
-                      ? 'bg-white text-indigo-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  گوگل
-                </button>
-              </div>
-
               {authSuccess && (
                 <div className="p-3 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -574,108 +410,41 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               )}
 
-              {/* Method 1: Username & Password */}
-              {loginMethod === 'PASSWORD' && (
-                <form onSubmit={handlePasswordLogin} className="space-y-3.5">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      نام کاربری یا ایمیل سازمانی
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={loginUsername}
-                      onChange={(e) => setLoginUsername(e.target.value)}
-                      placeholder="مثال: admin یا a.karimi"
-                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      رمز عبور
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="پیش‌فرض: 123"
-                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500 font-mono"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-colors cursor-pointer shadow-md"
-                  >
-                    ورود به پنل کاربری
-                  </button>
-                </form>
-              )}
-
-              {/* Method 2: Biometric Fingerprint */}
-              {loginMethod === 'FINGERPRINT' && (
-                <div className="text-center py-4 space-y-4">
-                  <div className="relative mx-auto w-24 h-24 rounded-full bg-indigo-50 border-2 border-indigo-200 flex items-center justify-center">
-                    <Fingerprint
-                      className={`w-14 h-14 ${
-                        isProcessingBiometric
-                          ? 'text-indigo-600 animate-pulse'
-                          : 'text-indigo-400'
-                      }`}
-                    />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-800">
-                      احراز هویت بیومتریک (سنسور دستگاه)
-                    </h4>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      انگشت خود را روی حسگر قرار دهید یا دکمه زیر را بزنید
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleBiometricLogin}
-                    disabled={isProcessingBiometric}
-                    className="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition-colors cursor-pointer"
-                  >
-                    {isProcessingBiometric ? 'در حال اسکن اثر انگشت...' : 'تایید اثر انگشت'}
-                  </button>
+              {/* Username & Password */}
+              <form onSubmit={handlePasswordLogin} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    نام کاربری یا ایمیل سازمانی
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    placeholder="مثال: admin یا کد پرسنلی"
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500 font-mono"
+                  />
                 </div>
-              )}
-
-              {/* Method 3: Google Sign-in */}
-              {loginMethod === 'GOOGLE' && (
-                <div className="text-center py-4 space-y-4">
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs text-slate-600">
-                    ورود امن یکپارچه با حساب گوگل سازمانی (Gmail)
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGoogleLogin}
-                    className="w-full py-3 px-4 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24">
-                      <path
-                        fill="#4285F4"
-                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                      />
-                    </svg>
-                    <span>ورود با حساب گوگل (Google Sign-In)</span>
-                  </button>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    رمز عبور
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="رمز عبور حساب کاربری"
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500 font-mono"
+                  />
                 </div>
-              )}
+                <button
+                  type="submit"
+                  className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-colors cursor-pointer shadow-md"
+                >
+                  ورود به پنل کاربری
+                </button>
+              </form>
             </div>
           </div>
         </div>

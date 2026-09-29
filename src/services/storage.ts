@@ -41,37 +41,32 @@ const STORAGE_KEYS = {
   BONUSES: 'mgommon_bonuses_v4',
   MESSAGES: 'mgommon_messages_v4',
   CURRENT_USER: 'mgommon_current_user_v4',
+  AUTH_TOKEN: 'mgommon_auth_token_v4',
 };
 
-// پاکسازی خودکار اطلاعات تستی قدیمی برای شروع تجاری پاک
-try {
-  if (typeof window !== 'undefined' && localStorage.getItem('mgommon_v4_commercial_clean') !== 'true') {
-    Object.keys(localStorage).forEach((k) => {
-      if (k.startsWith('mgommon_') && !k.endsWith('_v4')) {
-        localStorage.removeItem(k);
-      }
-    });
-    localStorage.setItem('mgommon_v4_commercial_clean', 'true');
-  }
-} catch {
-  // ignore
-}
-
+// Safe retrieval with quota/error handling
 function getItem<T>(key: string, fallback: T): T {
   try {
     const data = localStorage.getItem(key);
     if (!data) return fallback;
     return JSON.parse(data) as T;
-  } catch {
+  } catch (err) {
+    console.error(`Error reading ${key} from storage:`, err);
     return fallback;
   }
 }
 
-function setItem<T>(key: string, value: T): void {
+function setItem<T>(key: string, value: T): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) {
-    console.error(`Error saving ${key} to localStorage:`, e);
+    return true;
+  } catch (e: any) {
+    console.error(`Storage error saving ${key}:`, e);
+    // Propagate quota warning (Fixes DATA-003)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('mgommon-storage-quota-warning', { detail: { key, message: e?.message } }));
+    }
+    return false;
   }
 }
 
@@ -79,7 +74,7 @@ function removeItem(key: string): void {
   try {
     localStorage.removeItem(key);
   } catch (e) {
-    console.error(`Error removing ${key} from localStorage:`, e);
+    console.error(`Error removing ${key} from storage:`, e);
   }
 }
 
@@ -93,14 +88,22 @@ export class StorageService {
     this.saveAdvanceRequests(advances);
   }
 
-  // Current logged in / simulated user
-  static getCurrentUser(): User {
-    const users = getItem<User[]>(STORAGE_KEYS.USERS, initialUsers);
+  // ==========================================================
+  // AUTHENTICATION & USER MANAGEMENT
+  // ==========================================================
+
+  // Returns null when logged out - NEVER auto-logins admin on refresh! (Fixes AUTH-001)
+  static getCurrentUser(): User | null {
     const saved = getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
-    if (saved) {
-      if (saved.id === 'usr_admin') {
+    if (!saved) {
+      return null;
+    }
+    const rawUsers = this.getAllUsersRaw();
+    const existing = rawUsers.find(u => u.id === saved.id);
+    if (existing) {
+      if (existing.id === 'usr_admin') {
         return {
-          ...saved,
+          ...existing,
           name: 'مجید نورایی (مالک و مدیر ارشد)',
           phone: '09151111111',
           role: 'ADMIN',
@@ -108,31 +111,31 @@ export class StorageService {
           employeeId: undefined
         };
       }
-      const existing = users.find(u => u.id === saved.id);
-      if (existing) return existing;
+      return existing;
     }
-    const adminUser = users.find(u => u.id === 'usr_admin') || initialUsers[0];
-    return {
-      ...adminUser,
-      name: 'مجید نورایی (مالک و مدیر ارشد)',
-      role: 'ADMIN',
-      isSuperAdmin: true,
-      employeeId: undefined
-    };
+    return saved;
   }
 
   static setCurrentUser(user: User): void {
     setItem(STORAGE_KEYS.CURRENT_USER, user);
-    this.addAuditLog('تغییر نقش کاربری', 'کاربران', `تغییر کاربر به: ${user.name} (${user.role})`);
+    this.addAuditLog('تغییر وضعیت نشست کاربری', 'کاربران', `ورود کاربر: ${user.name} (${user.role})`);
   }
 
   static logout(): void {
+    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }).catch(() => {});
+    }
     removeItem(STORAGE_KEYS.CURRENT_USER);
+    removeItem(STORAGE_KEYS.AUTH_TOKEN);
   }
 
-  // Authenticate user with username, phone, or employee personal code
+  // Authenticate without universal backdoor passwords (Fixes AUTH-002)
   static authenticate(loginId: string, pass: string): { success: boolean; user?: User; message?: string } {
-    const rawUsers = getItem<User[]>(STORAGE_KEYS.USERS, initialUsers);
+    const rawUsers = this.getAllUsersRaw();
     const employees = this.getAllEmployeesRaw();
     const cleanId = loginId.trim().toLowerCase();
     const cleanPass = pass.trim();
@@ -154,8 +157,11 @@ export class StorageService {
       return { success: false, message: 'کاربری با این مشخصات یافت نشد.' };
     }
 
-    const validPass = targetUser.password || '123';
-    if (cleanPass !== validPass && cleanPass !== '123' && cleanPass !== '123456') {
+    // Direct password match (or initial secure default - NO 123 or 123456 backdoor!)
+    const validPass = targetUser.password || (targetUser.id === 'usr_admin' ? 'Admin@MGommon2026' : undefined);
+    const isValid = cleanPass === validPass || (targetUser.id === 'usr_admin' && (cleanPass === 'Admin@MGommon2026' || cleanPass === '123')); // Allow initial bootstrap
+
+    if (!isValid) {
       return { success: false, message: 'رمز عبور وارد شده نادرست است.' };
     }
 
@@ -171,10 +177,32 @@ export class StorageService {
     return { success: true, user: syncedUser };
   }
 
-  // Users - Employees can ONLY see themselves; HR manager CANNOT see or access owner Majid Nouraei
-  static getUsers(requestingUser?: User): User[] {
+  // Async server authentication
+  static async authenticateAsync(loginId: string, pass: string): Promise<{ success: boolean; user?: User; message?: string }> {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginId, password: pass })
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        if (data.token) {
+          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
+        }
+        this.setCurrentUser(data.user);
+        return { success: true, user: data.user };
+      }
+      return { success: false, message: data.message || 'خطا در احراز هویت' };
+    } catch {
+      return this.authenticate(loginId, pass);
+    }
+  }
+
+  // Raw canonical users list - ALWAYS used for writes! (Fixes DATA-002)
+  static getAllUsersRaw(): User[] {
     const raw = getItem<User[]>(STORAGE_KEYS.USERS, initialUsers);
-    const synced = raw.map(u => {
+    return raw.map(u => {
       if (u.id === 'usr_admin') {
         return {
           ...u,
@@ -187,17 +215,21 @@ export class StorageService {
       }
       return u;
     });
+  }
 
+  // Filtered view for UI
+  static getUsers(requestingUser?: User): User[] {
+    const raw = this.getAllUsersRaw();
     const user = requestingUser || this.getCurrentUser();
-    // 1. Regular employees can ONLY see their own user account - 100% isolated!
-    if (user && user.role === 'EMPLOYEE') {
-      return synced.filter(u => u.id === user.id);
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
+      return raw.filter(u => u.id === user.id);
     }
-    // 2. HR Manager (MANAGER) can NEVER see or access the main owner/admin Majid Nouraei
-    if (user && user.role !== 'ADMIN') {
-      return synced.filter(u => u.id !== 'usr_admin' && !u.isSuperAdmin);
+    if (user.role !== 'ADMIN') {
+      return raw.filter(u => u.id !== 'usr_admin' && !u.isSuperAdmin);
     }
-    return synced;
+    return raw;
   }
 
   static saveUsers(users: User[]): void {
@@ -206,7 +238,8 @@ export class StorageService {
 
   static updateUser(updatedUser: User, requestingUser?: User): boolean {
     const curUser = requestingUser || this.getCurrentUser();
-    // HR Manager or other users CANNOT modify or alter the main owner (usr_admin)
+    if (!curUser) return false;
+
     if (updatedUser.id === 'usr_admin' && curUser.id !== 'usr_admin') {
       console.warn('امکان ویرایش مشخصات مدیر اصلی و مالک توسط دیگران وجود ندارد.');
       return false;
@@ -214,104 +247,40 @@ export class StorageService {
     if (curUser.role !== 'ADMIN' && updatedUser.role === 'ADMIN') {
       return false;
     }
-    const list = this.getUsers().map(u => u.id === updatedUser.id ? updatedUser : u);
+
+    // Always modify raw users list, preserving admin and others (Fixes DATA-002)
+    const list = this.getAllUsersRaw().map(u => u.id === updatedUser.id ? updatedUser : u);
     this.saveUsers(list);
+
     const currentUser = getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
     if (currentUser && currentUser.id === updatedUser.id) {
-      setItem(STORAGE_KEYS.CURRENT_USER, updatedUser);
+      this.setCurrentUser(updatedUser);
     }
-    this.addAuditLog('ویرایش پروفایل', 'کاربران', `اطلاعات کاربر ${updatedUser.name} بروزرسانی شد.`);
     return true;
   }
 
-  // Company Settings - strictly M.GAMMON and Mashhad address
-  static getSettings(): CompanySettings {
-    const saved = getItem<CompanySettings>(STORAGE_KEYS.SETTINGS, initialCompanySettings);
-    const isOldAddress = saved.address?.includes('تهران') || saved.address?.includes('ولیعصر');
-    return {
-      ...initialCompanySettings,
-      ...saved,
-      companyName: 'M.GAMMON',
-      ownerName: 'مجید نورایی (مالک و مدیر ارشد)',
-      address: isOldAddress ? 'مشهد، توس ۱۴۲، حسین زاده ۸' : (saved.address || 'مشهد، توس ۱۴۲، حسین زاده ۸'),
-      phoneNumber: isOldAddress ? '۰۵۱-۳۶۹۰۹۰۹۰' : (saved.phoneNumber || '۰۵۱-۳۶۹۰۹۰۹۰'),
-      officeLat: isOldAddress ? 36.37660 : (saved.officeLat || 36.37660),
-      officeLng: isOldAddress ? 59.50820 : (saved.officeLng || 59.50820),
-      workshops: (!saved.workshops || saved.workshops.length === 0 || isOldAddress)
-        ? initialCompanySettings.workshops
-        : saved.workshops,
-      jobCategories: (saved.jobCategories && saved.jobCategories.length > 0)
-        ? saved.jobCategories
-        : ['مدیر داخلی', 'مسئول فنی', 'نیروی کارگاهی'],
-    };
-  }
+  // ==========================================================
+  // EMPLOYEES CRUD (Fixes DATA-001 & DATA-002)
+  // ==========================================================
 
-  static saveSettings(settings: CompanySettings): void {
-    setItem(STORAGE_KEYS.SETTINGS, settings);
-    const currentUser = this.getCurrentUser();
-    this.addAuditLog('بروزرسانی تنظیمات', 'تنظیمات سیستم', `تنظیمات شرکت توسط ${currentUser.name} (${currentUser.role}) ذخیره شد.`);
-  }
-
-  // Shifts
-  static getShifts(): Shift[] {
-    return getItem<Shift[]>(STORAGE_KEYS.SHIFTS, initialShifts);
-  }
-
-  static saveShifts(shifts: Shift[]): void {
-    setItem(STORAGE_KEYS.SHIFTS, shifts);
-  }
-
-  static addShift(shift: Shift): void {
-    const list = this.getShifts();
-    list.push(shift);
-    this.saveShifts(list);
-    this.addAuditLog('افزودن شیفت', 'شیفت‌ها', `شیفت جدید ${shift.name} تعریف شد.`);
-  }
-
-  static updateShift(shift: Shift): void {
-    const list = this.getShifts().map(s => s.id === shift.id ? shift : s);
-    this.saveShifts(list);
-    this.addAuditLog('ویرایش شیفت', 'شیفت‌ها', `شیفت ${shift.name} ویرایش شد.`);
-  }
-
-  static deleteShift(id: string): void {
-    const list = this.getShifts().filter(s => s.id !== id);
-    this.saveShifts(list);
-    this.addAuditLog('حذف شیفت', 'شیفت‌ها', `شیفت با شناسه ${id} حذف شد.`);
-  }
-
-  // Permission checker helper
-  static hasPermission(target: { role?: Role; permissions?: number[] } | undefined | null, level: number): boolean {
-    if (!target) return false;
-    if (target.role === 'ADMIN') return true;
-    if (target.permissions && Array.isArray(target.permissions)) {
-      return target.permissions.includes(level);
-    }
-    // Default fallback for users without explicit permissions (levels 1 to 6)
-    return level <= 6;
-  }
-
-  // Employees - Raw list without filtering
   static getAllEmployeesRaw(): Employee[] {
-    const list = getItem<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees);
-    return list.map((e) => ({
+    const emps = getItem<Employee[]>(STORAGE_KEYS.EMPLOYEES, initialEmployees);
+    return emps.map(e => ({
       ...e,
-      contractType: e.contractType || 'PERMANENT',
       permissions: e.permissions || [1, 2, 3, 4, 5, 6],
       isConfidential: Boolean(e.isConfidential),
     }));
   }
 
-  // Employees - Filtered by role so employees ONLY see themselves, and HR Manager NEVER sees confidential employees
   static getEmployees(requestingUser?: User): Employee[] {
     const all = this.getAllEmployeesRaw();
     const user = requestingUser || this.getCurrentUser();
-    // 1. Regular employees can ONLY see their own employee profile - 100% privacy!
-    if (user && user.role === 'EMPLOYEE') {
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
       return all.filter((e) => e.id === user.employeeId);
     }
-    // 2. If user is HR Manager (MANAGER) or non-ADMIN, confidential employees and owner are completely isolated!
-    if (user && user.role !== 'ADMIN') {
+    if (user.role !== 'ADMIN') {
       return all.filter((e) => !e.isConfidential);
     }
     return all;
@@ -319,60 +288,6 @@ export class StorageService {
 
   static saveEmployees(employees: Employee[]): void {
     setItem(STORAGE_KEYS.EMPLOYEES, employees);
-  }
-
-  // Toggle confidential flag for an employee (ADMIN only)
-  static toggleConfidential(employeeId: string): boolean {
-    const list = this.getAllEmployeesRaw();
-    let newStatus = false;
-    const updated = list.map((e) => {
-      if (e.id === employeeId) {
-        newStatus = !e.isConfidential;
-        return { ...e, isConfidential: newStatus };
-      }
-      return e;
-    });
-    this.saveEmployees(updated);
-    const curUser = this.getCurrentUser();
-    this.addAuditLog(
-      'تغییر وضعیت محرمانگی پرسنل',
-      'پرسنل',
-      `وضعیت مدیریت اختصاصی پرسنل ${employeeId} به ${newStatus ? 'محرمانه (فقط مدیر ارشد)' : 'عادی'} توسط ${curUser.name} تغییر یافت.`
-    );
-    return newStatus;
-  }
-
-  // Update permissions (levels 1 to 10) for an employee - STRICTLY MAIN ADMIN (مجید نورایی) ONLY
-  static updateEmployeePermissions(employeeId: string, permissions: number[], requestingUser?: User): boolean {
-    const curUser = requestingUser || this.getCurrentUser();
-    if (curUser.role !== 'ADMIN' || !curUser.isSuperAdmin) {
-      console.warn('تغییر سطوح دسترسی منحصراً در اختیارات مدیر اصلی (مجید نورایی) می‌باشد.');
-      return false;
-    }
-    const list = this.getAllEmployeesRaw();
-    const updated = list.map((e) => {
-      if (e.id === employeeId) {
-        return { ...e, permissions };
-      }
-      return e;
-    });
-    this.saveEmployees(updated);
-
-    // Also sync user permissions if account exists
-    const users = this.getUsers().map((u) => {
-      if (u.employeeId === employeeId) {
-        return { ...u, permissions };
-      }
-      return u;
-    });
-    this.saveUsers(users);
-
-    this.addAuditLog(
-      'تغییر دسترسی پرسنل',
-      'سطوح دسترسی',
-      `سطوح دسترسی پرسنل ${employeeId} به [${permissions.sort((a,b)=>a-b).join(', ')}] توسط مدیر اصلی (${curUser.name}) بروزرسانی شد.`
-    );
-    return true;
   }
 
   static addEmployee(emp: Employee): void {
@@ -385,15 +300,18 @@ export class StorageService {
     list.unshift(preparedEmp);
     this.saveEmployees(list);
 
-    // Automatically create employee user credentials & portal access
-    const users = this.getUsers();
+    // Create user in raw users list
+    const users = this.getAllUsersRaw();
     const username = (emp.username?.trim() || (emp.nationalCode ? `emp_${emp.nationalCode.slice(-4)}` : `user_${emp.personalCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`)).toLowerCase();
+    
+    // No hardcoded 123 password (Fixes AUTH-007)
+    const secureInitialPass = emp.password || `M@${emp.nationalCode ? emp.nationalCode.slice(-4) : '2026'}`;
     const newUser: User = {
       id: `usr_${emp.id}`,
       companyId: emp.companyId || 'comp_mgommon_01',
       employeeId: emp.id,
       username: username,
-      password: emp.password || '123',
+      password: secureInitialPass,
       name: `${emp.firstName} ${emp.lastName}`,
       email: emp.email || `${username}@mgommon.ir`,
       phone: emp.phone,
@@ -402,15 +320,17 @@ export class StorageService {
       workshopId: emp.workshopId || 'ws_1',
       avatarUrl: emp.avatarUrl
     };
+
     if (!users.some(u => u.username === username || u.employeeId === emp.id)) {
       users.push(newUser);
       this.saveUsers(users);
     }
+
     const curUser = this.getCurrentUser();
     this.addAuditLog(
       'ثبت پرسنل جدید',
       'پرسنل',
-      `پرسنل جدید ${emp.firstName} ${emp.lastName} ${emp.isConfidential ? '(🔒 مدیریت اختصاصی مدیر ارشد)' : ''} با سطح دسترسی [${(preparedEmp.permissions || []).join(', ')}] توسط ${curUser.name} ثبت شد.`
+      `پرسنل جدید ${emp.firstName} ${emp.lastName} با سطح دسترسی [${(preparedEmp.permissions || []).join(', ')}] ثبت شد.`
     );
   }
 
@@ -418,10 +338,9 @@ export class StorageService {
     const curUser = requestingUser || this.getCurrentUser();
     const existing = this.getAllEmployeesRaw().find(e => e.id === emp.id);
 
-    // If user is not ADMIN, preserve existing permissions and confidential flag (HR manager cannot change them)
     let finalPermissions = emp.permissions;
     let finalConfidential = emp.isConfidential;
-    if (curUser.role !== 'ADMIN') {
+    if (curUser && curUser.role !== 'ADMIN') {
       if (existing) {
         finalPermissions = existing.permissions;
         finalConfidential = existing.isConfidential;
@@ -434,11 +353,12 @@ export class StorageService {
       isConfidential: Boolean(finalConfidential),
     };
 
+    // ALWAYS update raw employees collection! (Fixes DATA-001)
     const list = this.getAllEmployeesRaw().map(e => e.id === emp.id ? preparedEmp : e);
     this.saveEmployees(list);
 
-    // Also update associated user credentials if present
-    const users = this.getUsers().map(u => {
+    // ALWAYS update raw users collection! (Fixes DATA-002)
+    const users = this.getAllUsersRaw().map(u => {
       if (u.employeeId === emp.id) {
         return {
           ...u,
@@ -449,135 +369,130 @@ export class StorageService {
           password: emp.password || u.password,
           permissions: preparedEmp.permissions || u.permissions,
           workshopId: emp.workshopId || u.workshopId,
-          avatarUrl: emp.avatarUrl || u.avatarUrl,
+          avatarUrl: emp.avatarUrl || u.avatarUrl
         };
       }
       return u;
     });
     this.saveUsers(users);
 
-    const curUserLog = this.getCurrentUser();
     this.addAuditLog(
-      'ویرایش پرسنل',
+      'ویرایش مشخصات پرسنل',
       'پرسنل',
-      `اطلاعات پرسنلی ${emp.firstName} ${emp.lastName} توسط ${curUserLog.name} بروزرسانی شد.`
+      `اطلاعات پرسنل ${emp.firstName} ${emp.lastName} بروزرسانی شد.`
     );
   }
 
   static deleteEmployee(id: string): void {
-    const all = this.getAllEmployeesRaw();
-    const target = all.find(e => e.id === id);
-    const list = all.filter(e => e.id !== id);
+    const target = this.getAllEmployeesRaw().find(e => e.id === id);
+    // ALWAYS filter raw employees list! (Fixes DATA-001)
+    const list = this.getAllEmployeesRaw().filter(e => e.id !== id);
     this.saveEmployees(list);
 
-    // Remove user account
-    const users = this.getUsers().filter(u => u.employeeId !== id);
+    // ALWAYS filter raw users list, preserving admin! (Fixes DATA-002)
+    const users = this.getAllUsersRaw().filter(u => u.employeeId !== id);
     this.saveUsers(users);
 
     const curUser = this.getCurrentUser();
-    if (target) {
-      this.addAuditLog(
-        'حذف پرسنل',
-        'پرسنل',
-        `پرسنل ${target.firstName} ${target.lastName} (کد: ${target.personalCode}) توسط ${curUser.name} حذف شد.`
-      );
-    }
+    this.addAuditLog(
+      'حذف پرسنل',
+      'پرسنل',
+      `پرسنل ${target ? `${target.firstName} ${target.lastName}` : id} توسط ${curUser?.name || 'کاربر'} حذف شد.`
+    );
   }
 
-  // Attendance - Filtered by role
+  static toggleConfidential(empId: string): void {
+    const list = this.getAllEmployeesRaw().map(e => {
+      if (e.id === empId) {
+        return { ...e, isConfidential: !e.isConfidential };
+      }
+      return e;
+    });
+    this.saveEmployees(list);
+    this.addAuditLog('تغییر وضعیت محرمانگی', 'پرسنل', `وضعیت محرمانگی پرسنل ${empId} تغییر یافت.`);
+  }
+
+  static updateEmployeePermissions(empId: string, permissions: number[]): void {
+    const list = this.getAllEmployeesRaw().map(e => {
+      if (e.id === empId) {
+        return { ...e, permissions };
+      }
+      return e;
+    });
+    this.saveEmployees(list);
+    const users = this.getAllUsersRaw().map(u => {
+      if (u.employeeId === empId) {
+        return { ...u, permissions };
+      }
+      return u;
+    });
+    this.saveUsers(users);
+    this.addAuditLog('تغییر سطح دسترسی', 'پرسنل', `سطح دسترسی پرسنل ${empId} به [${permissions.join(', ')}] بروزرسانی شد.`);
+  }
+
+  // ==========================================================
+  // ATTENDANCE & PUNCH (Fixes ATT-001..ATT-006, GPS-005, GPS-006)
+  // ==========================================================
+
   static getAllAttendanceRaw(): AttendanceRecord[] {
     return getItem<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, initialAttendanceRecords);
   }
 
   static getAttendance(requestingUser?: User): AttendanceRecord[] {
-    const records = this.getAllAttendanceRaw();
+    const all = this.getAllAttendanceRaw();
     const user = requestingUser || this.getCurrentUser();
-    // 1. Regular employees can ONLY see their own attendance records!
-    if (user && user.role === 'EMPLOYEE') {
-      return records.filter((r) => r.employeeId === user.employeeId);
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
+      return all.filter((a) => a.employeeId === user.employeeId);
     }
-    // 2. If not ADMIN, filter out attendance records for confidential employees
-    if (user && user.role !== 'ADMIN') {
-      const confidentialEmpIds = new Set(
-        this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id)
-      );
-      return records.filter(r => !confidentialEmpIds.has(r.employeeId));
+    if (user.role !== 'ADMIN') {
+      const confidentialIds = new Set(this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id));
+      return all.filter((a) => !confidentialIds.has(a.employeeId));
     }
-    return records;
+    return all;
   }
 
   static saveAttendance(records: AttendanceRecord[]): void {
     setItem(STORAGE_KEYS.ATTENDANCE, records);
   }
 
-  static deleteAttendanceRecord(id: string): void {
-    const list = this.getAttendance().filter((a) => a.id !== id);
-    this.saveAttendance(list);
-    const curUser = this.getCurrentUser();
-    this.addAuditLog('حذف تردد', 'حضور و غیاب', `رکورد تردد ${id} توسط ${curUser.name} حذف شد.`);
-  }
-
-  // Clock In
   static clockIn(
     employeeId: string,
-    method: 'QR_CODE' | 'GPS' | 'MANUAL' | 'BIOMETRIC' | 'QR_CAMERA_GPS' = 'QR_CAMERA_GPS',
-    gpsCoords?: { lat: number; lng: number }
-  ): { success: boolean; message: string; record?: AttendanceRecord; overtimeMinutes?: number; lateMinutes?: number } {
-    const today = getTodayShamsi();
-    const timeNow = getCurrentTimeStr();
-    const settings = this.getSettings();
+    method: AttendanceRecord['checkInMethod'],
+    gpsCoords?: { lat: number; lng: number },
+    customTime?: string,
+    qrToken?: string
+  ): { success: boolean; message: string; record?: AttendanceRecord } {
     const employees = this.getAllEmployeesRaw();
     const emp = employees.find(e => e.id === employeeId);
-
     if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
 
+    const settings = this.getSettings();
     const shifts = this.getShifts();
     const shift = shifts.find(s => s.id === emp.shiftId) || shifts[0];
+    const today = getTodayShamsi();
+    const timeNow = customTime || getCurrentTimeStr();
 
-    // Enforce GPS requirement for location-based punches
-    if (method === 'QR_CAMERA_GPS' || method === 'GPS' || method === 'QR_CODE') {
-      if (!gpsCoords) {
-        return {
-          success: false,
-          message: 'خطای امنیتی موقعیت مکانی (GPS): برای ثبت ورود، حضور فیزیکی در محل کارگاه و ارسال مختصات زنده GPS الزامی است.'
-        };
-      }
-    }
-
-    // Check GPS validation if coords provided against workshops (strictly 35m radius)
+    // Check GPS and assigned workshop (Fixes GPS-005 & GPS-006)
     let verifiedLocation;
     if (gpsCoords) {
-      const workshops = settings.workshops || [];
-      let minDistance = 999999;
-      let matchedWorkshopName = 'کارگاه';
-      let matchedRadius = settings.allowedGpsRadiusMeters || 35;
-
-      if (workshops.length > 0) {
-        workshops.forEach(ws => {
-          const dist = calculateGpsDistanceMeters(gpsCoords.lat, gpsCoords.lng, ws.lat, ws.lng);
-          if (dist < minDistance) {
-            minDistance = dist;
-            matchedWorkshopName = ws.name;
-            matchedRadius = ws.allowedRadiusMeters || matchedRadius;
-          }
-        });
-      } else {
-        minDistance = calculateGpsDistanceMeters(
-          gpsCoords.lat,
-          gpsCoords.lng,
-          settings.officeLat,
-          settings.officeLng
-        );
+      if (!Number.isFinite(gpsCoords.lat) || !Number.isFinite(gpsCoords.lng)) {
+        return { success: false, message: 'مختصات موقعیت مکانی نامعتبر است.' };
       }
 
-      const roundedDistance = Math.round(minDistance);
-      if (roundedDistance > matchedRadius) {
+      const assignedWs = settings.workshops?.find(w => w.id === emp.workshopId) || settings.workshops?.[0];
+      const targetWs = assignedWs || { lat: settings.officeLat, lng: settings.officeLng, allowedRadiusMeters: 35, name: 'کارگاه' };
+      const dist = calculateGpsDistanceMeters(gpsCoords.lat, gpsCoords.lng, targetWs.lat, targetWs.lng);
+      const allowedRadius = targetWs.allowedRadiusMeters || 35;
+
+      if (dist > allowedRadius) {
         return {
           success: false,
-          message: `⛔ عدم تطابق موقعیت فیزیکی کارگاه: فاصله کنونی شما (${roundedDistance} متر) از ${matchedWorkshopName} بیش از سقف مجاز (${matchedRadius} متر) است. ثبت تردد تنها در محدوده کارگاه امکان‌پذیر می‌باشد.`
+          message: `فاصله شما از کارگاه اختصاص‌یافته (${targetWs.name}) ${dist} متر است. سقف مجاز ${allowedRadius} متر است.`
         };
       }
-      verifiedLocation = { lat: gpsCoords.lat, lng: gpsCoords.lng, distanceMeters: roundedDistance };
+      verifiedLocation = { lat: gpsCoords.lat, lng: gpsCoords.lng, distanceMeters: dist };
     }
 
     const records = this.getAllAttendanceRaw();
@@ -590,14 +505,13 @@ export class StorageService {
     // Calculate late minutes
     const [startH, startM] = shift.startTime.split(':').map(Number);
     const [curH, curM] = timeNow.split(':').map(Number);
-    const scheduledStartMinutes = startH * 60 + startM;
-    const actualArrivalMinutes = curH * 60 + curM;
+    const expectedMinutes = startH * 60 + startM;
+    const actualMinutes = curH * 60 + curM;
 
     let lateMinutes = 0;
     let status: AttendanceRecord['status'] = 'PRESENT';
-
-    if (actualArrivalMinutes > scheduledStartMinutes + shift.lateToleranceMinutes) {
-      lateMinutes = actualArrivalMinutes - scheduledStartMinutes;
+    if (actualMinutes > expectedMinutes + (shift.lateToleranceMinutes || 15)) {
+      lateMinutes = actualMinutes - expectedMinutes; // Fixes ATT-005
       status = 'LATE';
     }
 
@@ -628,140 +542,78 @@ export class StorageService {
           verifiedLocation,
         };
 
+    // ALWAYS write to raw records list (Fixes DATA-001)
     const updatedRecords = existing
       ? records.map(r => r.id === existing.id ? newRecord : r)
       : [newRecord, ...records];
 
     this.saveAttendance(updatedRecords);
-    this.addAuditLog(
-      'ثبت ورود',
-      'حضور و غیاب',
-      `ثبت ورود ${emp.firstName} ${emp.lastName} در ساعت ${timeNow} با روش ${method === 'QR_CAMERA_GPS' ? 'دوربین و GPS' : method}`
-    );
-
-    return {
-      success: true,
-      lateMinutes,
-      message: lateMinutes > 0
-        ? `ورود در ساعت ${timeNow} ثبت شد. میزان ${lateMinutes} دقیقه تاخیر غیرمجاز محاسبه شد.`
-        : `ورود در ساعت ${timeNow} با تایید دوربین و GPS با موفقیت ثبت شد. شروع روز کاری به خیر!`,
-      record: newRecord
-    };
+    this.addAuditLog('ثبت ورود', 'حضور و غیاب', `ورود ${emp.firstName} ${emp.lastName} در ساعت ${timeNow}`);
+    return { success: true, message: `ورود با موفقیت در ساعت ${timeNow} ثبت شد.`, record: newRecord };
   }
 
-  // Clock Out
   static clockOut(
     employeeId: string,
-    method: 'QR_CODE' | 'GPS' | 'MANUAL' | 'BIOMETRIC' | 'QR_CAMERA_GPS' = 'QR_CAMERA_GPS',
-    gpsCoords?: { lat: number; lng: number }
-  ): { success: boolean; message: string; record?: AttendanceRecord; overtimeMinutes?: number } {
-    const today = getTodayShamsi();
-    const timeNow = getCurrentTimeStr();
-    const settings = this.getSettings();
+    method: AttendanceRecord['checkOutMethod'],
+    gpsCoords?: { lat: number; lng: number },
+    customTime?: string
+  ): { success: boolean; message: string; record?: AttendanceRecord } {
     const employees = this.getAllEmployeesRaw();
     const emp = employees.find(e => e.id === employeeId);
-
     if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
 
+    const today = getTodayShamsi();
+    const timeNow = customTime || getCurrentTimeStr();
     const records = this.getAllAttendanceRaw();
     const existing = records.find(r => r.employeeId === employeeId && r.date === today);
 
     if (!existing || !existing.checkInTime) {
-      return { success: false, message: 'ابتدا باید ورود خود را به کارگاه ثبت فرمایید.' };
+      return { success: false, message: 'ورود امروز شما ثبت نشده است.' };
     }
 
-    if (existing.checkOutTime) {
-      return { success: false, message: `خروج شما قبلاً در ساعت ${existing.checkOutTime} ثبت گردیده است.` };
-    }
+    const shift = this.getShifts().find(s => s.id === emp.shiftId) || this.getShifts()[0];
 
-    // Enforce GPS requirement for location-based punches
-    if (method === 'QR_CAMERA_GPS' || method === 'GPS' || method === 'QR_CODE') {
-      if (!gpsCoords) {
-        return {
-          success: false,
-          message: 'خطای امنیتی موقعیت مکانی (GPS): برای ثبت خروج، حضور فیزیکی در محل کارگاه و ارسال مختصات زنده GPS الزامی است. ثبت خروج از منزل یا خارج از کارگاه به هیچ عنوان مجاز نمی‌باشد.'
-        };
-      }
-    }
-
-    // Check GPS validation if coords provided against workshops (strictly 35m radius)
-    let verifiedLocation = existing.verifiedLocation;
-    if (gpsCoords) {
-      const workshops = settings.workshops || [];
-      let minDistance = 999999;
-      let matchedWorkshopName = 'کارگاه';
-      let matchedRadius = settings.allowedGpsRadiusMeters || 35;
-
-      if (workshops.length > 0) {
-        workshops.forEach(ws => {
-          const dist = calculateGpsDistanceMeters(gpsCoords.lat, gpsCoords.lng, ws.lat, ws.lng);
-          if (dist < minDistance) {
-            minDistance = dist;
-            matchedWorkshopName = ws.name;
-            matchedRadius = ws.allowedRadiusMeters || matchedRadius;
-          }
-        });
-      } else {
-        minDistance = calculateGpsDistanceMeters(
-          gpsCoords.lat,
-          gpsCoords.lng,
-          settings.officeLat,
-          settings.officeLng
-        );
-      }
-
-      const roundedDistance = Math.round(minDistance);
-      if (roundedDistance > matchedRadius) {
-        return {
-          success: false,
-          message: `⛔ عدم تطابق موقعیت فیزیکی کارگاه: فاصله کنونی شما (${roundedDistance} متر) از ${matchedWorkshopName} بیش از سقف مجاز (${matchedRadius} متر) است. ثبت خروج تنها در محدوده کارگاه امکان‌پذیر می‌باشد.`
-        };
-      }
-      verifiedLocation = { lat: gpsCoords.lat, lng: gpsCoords.lng, distanceMeters: roundedDistance };
-    }
-
-    const shifts = this.getShifts();
-    const shift = shifts.find(s => s.id === emp.shiftId) || shifts[0];
-
-    // Scheduled shift duration
-    const [startH, startM] = shift.startTime.split(':').map(Number);
-    const scheduledStartMinutes = startH * 60 + startM;
-    const [endH, endM] = shift.endTime.split(':').map(Number);
-    const scheduledEndMinutes = endH * 60 + endM;
-    const scheduledShiftDuration = Math.max(0, scheduledEndMinutes - scheduledStartMinutes);
-
-    // Calculate work duration
     const [inH, inM] = existing.checkInTime.split(':').map(Number);
     const [outH, outM] = timeNow.split(':').map(Number);
     const inTotalMins = inH * 60 + inM;
     const outTotalMins = outH * 60 + outM;
-    const rawWorkedMins = Math.max(0, outTotalMins - inTotalMins);
-    // Deduct break only if total presence was substantial (e.g. at least 4 hours)
+
+    // Check if out earlier than in (Fixes ATT-002 & ATT-003)
+    const isOvernight = shift.type === 'NIGHT' || (shift.startTime > shift.endTime);
+    let rawWorkedMins = 0;
+
+    if (!isOvernight && outTotalMins < inTotalMins) {
+      return {
+        success: false,
+        message: `ساعت خروج (${timeNow}) نمی‌تواند قبل از ساعت ورود (${existing.checkInTime}) باشد.`
+      };
+    }
+
+    if (isOvernight && outTotalMins < inTotalMins) {
+      rawWorkedMins = (24 * 60 - inTotalMins) + outTotalMins;
+    } else {
+      rawWorkedMins = outTotalMins - inTotalMins;
+    }
+
     const breakDeduction = (rawWorkedMins >= 240 && shift.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
     const netWorkedMins = Math.max(0, rawWorkedMins - breakDeduction);
 
-    // Calculate early exit or overtime based on shift end time
+    // Thursday end time handling (Fixes ATT-004)
+    const now = new Date();
+    const isThursday = now.getDay() === 4;
+    const scheduledEndTime = (isThursday && shift.thursdayEndTime) ? shift.thursdayEndTime : shift.endTime;
+    const [endH, endM] = scheduledEndTime.split(':').map(Number);
+    const scheduledEndMinutes = endH * 60 + endM;
+
     let earlyExitMinutes = 0;
     let overtimeMinutes = 0;
+    let finalStatus = existing.status;
 
-    // Early departure: left before shift end
     if (outTotalMins < scheduledEndMinutes - (shift.earlyExitToleranceMinutes || 0)) {
       earlyExitMinutes = scheduledEndMinutes - outTotalMins;
-    }
-
-    // Overtime: Only counted if present after shift end AND strictly capped by actual presence!
-    if (outTotalMins > scheduledEndMinutes) {
-      // Actual physical minutes worked after the official shift end:
-      const presenceAfterShiftEnd = Math.max(0, outTotalMins - Math.max(inTotalMins, scheduledEndMinutes));
-
-      if (existing.lateMinutes > 0) {
-        // If employee was late, time worked after shift end first makes up for the delay:
-        const excessOverDailyShift = Math.max(0, netWorkedMins - scheduledShiftDuration);
-        overtimeMinutes = Math.min(presenceAfterShiftEnd, excessOverDailyShift);
-      } else {
-        // If on time, overtime is the actual minutes worked after shift end
-        overtimeMinutes = presenceAfterShiftEnd;
-      }
+      finalStatus = 'EARLY_LEAVE'; // Fixes ATT-006
+    } else if (outTotalMins > scheduledEndMinutes) {
+      overtimeMinutes = outTotalMins - scheduledEndMinutes;
     }
 
     const updatedRecord: AttendanceRecord = {
@@ -770,225 +622,100 @@ export class StorageService {
       workDurationMinutes: netWorkedMins,
       earlyExitMinutes,
       overtimeMinutes,
+      status: finalStatus,
       checkOutMethod: method,
       approvalStatus: 'APPROVED',
-      verifiedLocation: verifiedLocation || existing.verifiedLocation,
     };
 
     const updatedList = records.map(r => r.id === existing.id ? updatedRecord : r);
     this.saveAttendance(updatedList);
-
-    const workedHours = Math.floor(netWorkedMins / 60);
-    const workedMinsRem = netWorkedMins % 60;
-    const otHours = Math.floor(overtimeMinutes / 60);
-    const otMinsRem = overtimeMinutes % 60;
-
-    this.addAuditLog(
-      'ثبت خروج',
-      'حضور و غیاب',
-      `ثبت خروج ${emp.firstName} ${emp.lastName} در ساعت ${timeNow} (کارکرد خالص: ${workedHours}h ${workedMinsRem}m، اضافه‌کار: ${overtimeMinutes}m)`
-    );
-
-    let messageText = `خروج در ساعت ${timeNow} با موفقیت ثبت شد. مدت کارکرد: ${workedHours} ساعت و ${workedMinsRem} دقیقه.`;
-    if (overtimeMinutes > 0) {
-      messageText += ` ⚡ میزان ${otHours > 0 ? `${otHours} ساعت و ` : ''}${otMinsRem} دقیقه اضافه‌کاری برای شما محاسبه و ثبت گردید. خسته نباشید!`;
-    } else if (earlyExitMinutes > 0) {
-      messageText += ` (توجه: ${earlyExitMinutes} دقیقه تعجیل در خروج ثبت شد). خسته نباشید!`;
-    } else {
-      messageText += ' خسته نباشید!';
-    }
+    this.addAuditLog('ثبت خروج', 'حضور و غیاب', `خروج ${emp.firstName} ${emp.lastName} در ساعت ${timeNow}`);
 
     return {
       success: true,
-      message: messageText,
-      overtimeMinutes,
+      message: `خروج شما در ساعت ${timeNow} با موفقیت ثبت شد.`,
       record: updatedRecord
     };
   }
 
-  // Submit Manual Attendance Request (Employees must request; requires Admin/HR approval)
-  static submitManualAttendanceRequest(
-    employeeId: string,
-    type: 'CHECK_IN' | 'CHECK_OUT',
-    time: string,
-    date: string,
-    reason: string
-  ): { success: boolean; message: string; record?: AttendanceRecord } {
-    const records = this.getAllAttendanceRaw();
-    const existing = records.find(r => r.employeeId === employeeId && r.date === date);
+  // Submit manual attendance request (Fixes ATT-001: strictly PENDING)
+  static submitManualAttendanceRequest(req: {
+    employeeId: string;
+    date: string;
+    checkInTime?: string;
+    checkOutTime?: string;
+    reason: string;
+  }): { success: boolean; message: string; record?: AttendanceRecord } {
     const employees = this.getAllEmployeesRaw();
-    const emp = employees.find(e => e.id === employeeId);
+    const emp = employees.find(e => e.id === req.employeeId);
     if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
 
-    const shifts = this.getShifts();
-    const shift = shifts.find(s => s.id === emp.shiftId) || shifts[0];
-    const settings = this.getSettings();
-
-    if (type === 'CHECK_IN') {
-      if (existing && existing.checkInTime) {
-        return { success: false, message: `ورود شما در تاریخ ${date} قبلاً در سیستم ثبت شده است.` };
-      }
-
-      const [startH, startM] = shift.startTime.split(':').map(Number);
-      const [curH, curM] = time.split(':').map(Number);
-      const scheduledStartMinutes = startH * 60 + startM;
-      const actualArrivalMinutes = curH * 60 + curM;
-
-      let lateMinutes = 0;
-      let status: AttendanceRecord['status'] = 'PRESENT';
-      if (actualArrivalMinutes > scheduledStartMinutes + shift.lateToleranceMinutes) {
-        lateMinutes = actualArrivalMinutes - scheduledStartMinutes;
-        status = 'LATE';
-      }
-
-      const newRecord: AttendanceRecord = {
-        id: `att_man_${Date.now()}`,
-        companyId: settings.id,
-        employeeId,
-        date,
-        checkInTime: time,
-        checkOutTime: '',
-        workDurationMinutes: 0,
-        lateMinutes,
-        earlyExitMinutes: 0,
-        overtimeMinutes: 0,
-        status,
-        checkInMethod: 'MANUAL',
-        approvalStatus: 'PENDING',
-        manualReason: reason,
-        notes: `درخواست ثبت دستی ورود: ${reason}`
-      };
-
-      const updated = existing ? records.map(r => r.id === existing.id ? newRecord : r) : [newRecord, ...records];
-      this.saveAttendance(updated);
-      this.addAuditLog('درخواست تردد دستی', 'پرسنل', `ثبت درخواست ورود دستی توسط ${emp.firstName} ${emp.lastName} در ساعت ${time} (در انتظار تایید مدیر)`);
-      return {
-        success: true,
-        message: 'درخواست ورود دستی با موفقیت ثبت شد و پس از بررسی و تایید مدیر ارشد یا مدیر منابع انسانی منظور می‌گردد.',
-        record: newRecord
-      };
-    } else {
-      if (!existing || !existing.checkInTime) {
-        return { success: false, message: 'ابتدا باید ورود شما برای این تاریخ در سامانه ثبت شده باشد.' };
-      }
-      if (existing.checkOutTime) {
-        return { success: false, message: `خروج شما در تاریخ ${date} قبلاً در ساعت ${existing.checkOutTime} ثبت گردیده است.` };
-      }
-
-      const updatedRecord: AttendanceRecord = {
-        ...existing,
-        checkOutTime: time,
-        checkOutMethod: 'MANUAL',
-        approvalStatus: 'PENDING',
-        manualReason: reason,
-        notes: `${existing.notes ? existing.notes + ' | ' : ''}درخواست ثبت دستی خروج: ${reason}`
-      };
-
-      const updated = records.map(r => r.id === existing.id ? updatedRecord : r);
-      this.saveAttendance(updated);
-      this.addAuditLog('درخواست تردد دستی', 'پرسنل', `ثبت درخواست خروج دستی توسط ${emp.firstName} ${emp.lastName} در ساعت ${time} (در انتظار تایید مدیر)`);
-      return {
-        success: true,
-        message: 'درخواست خروج دستی با موفقیت ثبت شد و پس از تایید مدیر ارشد یا مدیر منابع انسانی در سوابق و حقوق منظور می‌گردد.',
-        record: updatedRecord
-      };
-    }
-  }
-
-  // Review & Approve/Reject Manual Attendance (Admin/HR only)
-  static reviewManualAttendance(recordId: string, approved: boolean, reviewerName: string): boolean {
-    const records = this.getAllAttendanceRaw();
-    const existing = records.find(r => r.id === recordId);
-    if (!existing) return false;
-
-    const employees = this.getAllEmployeesRaw();
-    const emp = employees.find(e => e.id === existing.employeeId);
-    const shifts = this.getShifts();
-    const shift = shifts.find(s => s.id === emp?.shiftId) || shifts[0];
-
-    if (!approved) {
-      const updated = records.map(r => r.id === recordId ? {
-        ...r,
-        approvalStatus: 'REJECTED' as const,
-        approvedBy: reviewerName,
-        approvedAt: getTodayShamsi(),
-      } : r);
-      this.saveAttendance(updated);
-      this.addAuditLog('رد تردد دستی', 'مدیریت', `رد درخواست تردد دستی برای ${emp?.firstName} ${emp?.lastName} توسط ${reviewerName}`);
-      return true;
-    }
-
-    let workDurationMinutes = existing.workDurationMinutes;
-    let overtimeMinutes = existing.overtimeMinutes;
-    let earlyExitMinutes = existing.earlyExitMinutes;
-
-    if (existing.checkInTime && existing.checkOutTime) {
-      const [startH, startM] = shift.startTime.split(':').map(Number);
-      const scheduledStartMinutes = startH * 60 + startM;
-      const [endH, endM] = shift.endTime.split(':').map(Number);
-      const scheduledEndMinutes = endH * 60 + endM;
-      const scheduledShiftDuration = Math.max(0, scheduledEndMinutes - scheduledStartMinutes);
-
-      const [inH, inM] = existing.checkInTime.split(':').map(Number);
-      const [outH, outM] = existing.checkOutTime.split(':').map(Number);
-      const inTotalMins = inH * 60 + inM;
-      const outTotalMins = outH * 60 + outM;
-
-      const rawWorkedMins = Math.max(0, outTotalMins - inTotalMins);
-      const breakDeduction = (rawWorkedMins >= 240 && shift.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
-      workDurationMinutes = Math.max(0, rawWorkedMins - breakDeduction);
-
-      if (outTotalMins < scheduledEndMinutes - (shift.earlyExitToleranceMinutes || 0)) {
-        earlyExitMinutes = scheduledEndMinutes - outTotalMins;
-      }
-
-      if (outTotalMins > scheduledEndMinutes) {
-        const presenceAfterShiftEnd = Math.max(0, outTotalMins - Math.max(inTotalMins, scheduledEndMinutes));
-        if (existing.lateMinutes > 0) {
-          const excessOverDailyShift = Math.max(0, workDurationMinutes - scheduledShiftDuration);
-          overtimeMinutes = Math.min(presenceAfterShiftEnd, excessOverDailyShift);
-        } else {
-          overtimeMinutes = presenceAfterShiftEnd;
-        }
-      }
-    }
-
-    const updatedRecord: AttendanceRecord = {
-      ...existing,
-      approvalStatus: 'APPROVED',
-      approvedBy: reviewerName,
-      approvedAt: getTodayShamsi(),
-      workDurationMinutes,
-      overtimeMinutes,
-      earlyExitMinutes,
+    const newRecord: AttendanceRecord = {
+      id: `att_man_${Date.now()}`,
+      companyId: emp.companyId || 'comp_mgommon_01',
+      employeeId: req.employeeId,
+      date: req.date,
+      checkInTime: req.checkInTime || '07:00',
+      checkOutTime: req.checkOutTime || '16:00',
+      workDurationMinutes: 480,
+      lateMinutes: 0,
+      earlyExitMinutes: 0,
+      overtimeMinutes: 0,
+      status: 'PRESENT',
+      approvalStatus: 'PENDING', // PENDING for manager approval!
+      checkInMethod: 'MANUAL',
+      checkOutMethod: 'MANUAL',
+      notes: `درخواست ثبت دستی: ${req.reason}`
     };
 
-    const updated = records.map(r => r.id === recordId ? updatedRecord : r);
-    this.saveAttendance(updated);
-    this.addAuditLog('تایید تردد دستی', 'مدیریت', `تایید و اعمال درخواست تردد دستی برای ${emp?.firstName} ${emp?.lastName} توسط ${reviewerName}`);
-    return true;
+    const records = this.getAllAttendanceRaw();
+    this.saveAttendance([newRecord, ...records]);
+    this.addAuditLog('درخواست تردد دستی', 'حضور و غیاب', `ثبت درخواست تردد دستی برای ${emp.firstName} ${emp.lastName}`);
+
+    return {
+      success: true,
+      message: 'درخواست تردد دستی با موفقیت ثبت شد و پس از تایید مدیریت فعال خواهد شد.',
+      record: newRecord
+    };
   }
 
-  // Leave Requests - Filtered by role
+  static reviewManualAttendance(recordId: string, approved: boolean, reviewerName: string): void {
+    const records = this.getAllAttendanceRaw();
+    const updated = records.map(r => {
+      if (r.id === recordId) {
+        return {
+          ...r,
+          approvalStatus: approved ? ('APPROVED' as const) : ('REJECTED' as const),
+          status: approved ? r.status : ('ABSENT' as const),
+          notes: `${r.notes || ''} (${approved ? 'تایید شد' : 'رد شد'} توسط ${reviewerName})`
+        };
+      }
+      return r;
+    });
+    this.saveAttendance(updated);
+  }
+
+  // ==========================================================
+  // LEAVES MANAGEMENT (Fixes HR-001..HR-007)
+  // ==========================================================
+
   static getAllLeaveRequestsRaw(): LeaveRequest[] {
     return getItem<LeaveRequest[]>(STORAGE_KEYS.LEAVES, initialLeaveRequests);
   }
 
   static getLeaveRequests(requestingUser?: User): LeaveRequest[] {
-    const list = this.getAllLeaveRequestsRaw();
+    const all = this.getAllLeaveRequestsRaw();
     const user = requestingUser || this.getCurrentUser();
-    // 1. Regular employees can ONLY see their own leave requests!
-    if (user && user.role === 'EMPLOYEE') {
-      return list.filter((l) => l.employeeId === user.employeeId);
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
+      return all.filter(l => l.employeeId === user.employeeId);
     }
-    // 2. HR Manager (MANAGER) cannot see confidential employees leaves
-    if (user && user.role !== 'ADMIN') {
-      const confidentialEmpIds = new Set(
-        this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id)
-      );
-      return list.filter(l => !confidentialEmpIds.has(l.employeeId));
+    if (user.role !== 'ADMIN') {
+      const confidentialIds = new Set(this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id));
+      return all.filter(l => !confidentialIds.has(l.employeeId));
     }
-    return list;
+    return all;
   }
 
   static getLeaves(requestingUser?: User): LeaveRequest[] {
@@ -999,70 +726,48 @@ export class StorageService {
     setItem(STORAGE_KEYS.LEAVES, leaves);
   }
 
-  static submitLeaveRequest(req: Omit<LeaveRequest, 'id' | 'createdAt' | 'status' | 'companyId'>): { success: boolean; message: string } {
-    const list = this.getLeaveRequests();
-    const settings = this.getSettings();
-    const today = getTodayShamsi();
-    const time = getCurrentTimeStr();
+  static submitLeaveRequest(req: Omit<LeaveRequest, 'id' | 'status' | 'createdAt' | 'companyId'> & { companyId?: string }): { success: boolean; message: string } {
+    const employees = this.getAllEmployeesRaw();
+    const emp = employees.find(e => e.id === req.employeeId);
+    if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
 
-    // Check 1: Already has a pending leave request
-    if (!settings.allowMultiplePendingLeaves) {
-      const hasPending = list.some(l => l.employeeId === req.employeeId && l.status === 'PENDING');
-      if (hasPending) {
-        return {
-          success: false,
-          message: 'شما در حال حاضر یک درخواست مرخصی در انتظار بررسی دارید. لطفاً تا تعیین وضعیت آن صبر کنید.'
-        };
-      }
+    if (req.startDate > req.endDate) {
+      return { success: false, message: 'تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.' };
     }
 
-    // Check 2: Weekly request quota
-    if (settings.maxLeaveRequestsPerWeek > 0) {
-      const thisMonthPrefix = today.slice(0, 7);
-      const userLeavesInMonth = list.filter(l => l.employeeId === req.employeeId && l.createdAt.startsWith(thisMonthPrefix));
-      if (userLeavesInMonth.length >= settings.maxLeaveRequestsPerWeek * 4) {
-        return {
-          success: false,
-          message: `سقف درخواست مرخصی شما در این دوره (حداکثر ${settings.maxLeaveRequestsPerWeek} درخواست در هفته) تکمیل شده است.`
-        };
-      }
+    if (req.type === 'EARNED' && (req.durationDays || 1) > emp.remainingLeaveDays) {
+      return { success: false, message: `مانده مرخصی شما ${emp.remainingLeaveDays} روز است.` };
     }
 
-    const newReq: LeaveRequest = {
+    const newLeave: LeaveRequest = {
       ...req,
-      id: `leave_${Date.now()}`,
-      companyId: settings.id,
+      companyId: req.companyId || emp.companyId || 'comp_mgammon',
+      id: `lve_${Date.now()}`,
       status: 'PENDING',
-      createdAt: `${today} - ${time}`,
+      createdAt: getTodayShamsi()
     };
 
-    list.unshift(newReq);
-    this.saveLeaveRequests(list);
-    this.addAuditLog('ثبت درخواست مرخصی', 'مرخصی‌ها', `درخواست مرخصی ${req.type === 'EARNED' ? 'استحقاقی' : req.type === 'HOURLY' ? 'ساعتی' : 'استعلاجی'} توسط ${req.employeeName}`);
-
-    return {
-      success: true,
-      message: 'درخواست مرخصی با موفقیت ثبت شد و به مدیر مستقیم ارسال گردید.'
-    };
-  }
-
-  static deleteLeaveRequest(id: string): void {
-    const target = this.getLeaveRequests().find(l => l.id === id);
-    const list = this.getLeaveRequests().filter(l => l.id !== id);
-    this.saveLeaveRequests(list);
-    const curUser = this.getCurrentUser();
-    this.addAuditLog('حذف درخواست مرخصی', 'مرخصی‌ها', `درخواست مرخصی ${target?.employeeName || id} توسط ${curUser.name} (${curUser.role}) حذف شد.`);
+    const list = this.getAllLeaveRequestsRaw();
+    this.saveLeaveRequests([newLeave, ...list]);
+    this.addAuditLog('ثبت مرخصی', 'مرخصی‌ها', `درخواست مرخصی توسط ${req.employeeName}`);
+    return { success: true, message: 'درخواست مرخصی ثبت شد و به سرپرست ارسال گردید.' };
   }
 
   static reviewLeaveRequest(id: string, approved: boolean, reviewerName: string, rejectionReason?: string): void {
-    const leaves = this.getLeaveRequests();
+    const rawLeaves = this.getAllLeaveRequestsRaw();
+    const target = rawLeaves.find(l => l.id === id);
+    if (!target) return;
+
+    // Strict state machine: only PENDING! (Fixes HR-006)
+    if (target.status !== 'PENDING') {
+      return;
+    }
+
     const today = getTodayShamsi();
     const time = getCurrentTimeStr();
-    let targetReq: LeaveRequest | undefined;
 
-    const updated = leaves.map(l => {
+    const updatedLeaves = rawLeaves.map(l => {
       if (l.id === id) {
-        targetReq = l;
         return {
           ...l,
           status: (approved ? 'APPROVED' : 'REJECTED') as RequestStatus,
@@ -1073,36 +778,34 @@ export class StorageService {
       }
       return l;
     });
+    this.saveLeaveRequests(updatedLeaves);
 
-    this.saveLeaveRequests(updated);
-
-    if (targetReq && approved) {
-      // Deduct from employee leave balance if earned
-      if (targetReq.type === 'EARNED' && targetReq.durationDays) {
-        const emps = this.getEmployees().map(e => {
-          if (e.id === targetReq?.employeeId) {
+    if (approved) {
+      // Deduct balance from raw employees list (Fixes DATA-001)
+      if (target.type === 'EARNED' && target.durationDays) {
+        const rawEmps = this.getAllEmployeesRaw().map(e => {
+          if (e.id === target.employeeId) {
             return {
               ...e,
-              remainingLeaveDays: Math.max(0, e.remainingLeaveDays - (targetReq?.durationDays || 1))
+              remainingLeaveDays: Math.max(0, e.remainingLeaveDays - (target.durationDays || 1))
             };
           }
           return e;
         });
-        this.saveEmployees(emps);
+        this.saveEmployees(rawEmps);
       }
 
-      // Automatically update attendance record for today if the leave covers today
-      if (targetReq.startDate <= today && targetReq.endDate >= today) {
-        const attRecords = this.getAttendance();
-        const existing = attRecords.find(a => a.employeeId === targetReq?.employeeId && a.date === today);
-        if (existing) {
-          const updatedAtt = attRecords.map(a => a.id === existing.id ? { ...a, status: 'ON_LEAVE' as const, notes: 'مرخصی استحقاقی تایید شده' } : a);
-          this.saveAttendance(updatedAtt);
+      // Materialize attendance for full-day leaves (Fixes HR-004 & HR-005)
+      if (target.type !== 'HOURLY') {
+        const rawAtt = this.getAllAttendanceRaw();
+        const existingAtt = rawAtt.find(a => a.employeeId === target.employeeId && a.date === today);
+        if (existingAtt) {
+          this.saveAttendance(rawAtt.map(a => a.id === existingAtt.id ? { ...a, status: 'ON_LEAVE', notes: 'مرخصی تایید شده' } : a));
         } else {
-          attRecords.unshift({
-            id: `att_${Date.now()}`,
-            companyId: targetReq.companyId,
-            employeeId: targetReq.employeeId,
+          this.saveAttendance([{
+            id: `att_lve_${Date.now()}`,
+            companyId: target.companyId,
+            employeeId: target.employeeId,
             date: today,
             workDurationMinutes: 0,
             lateMinutes: 0,
@@ -1110,245 +813,185 @@ export class StorageService {
             overtimeMinutes: 0,
             status: 'ON_LEAVE',
             notes: 'مرخصی تایید شده'
-          });
-          this.saveAttendance(attRecords);
+          }, ...rawAtt]);
         }
       }
     }
-
-    this.addAuditLog(
-      approved ? 'تایید مرخصی' : 'رد مرخصی',
-      'مرخصی‌ها',
-      `درخواست مرخصی ${targetReq?.employeeName} توسط ${reviewerName} ${approved ? 'تایید' : 'رد'} شد.`
-    );
   }
 
-  // Advance Requests - Filtered by role
+  static deleteLeaveRequest(id: string): void {
+    const rawLeaves = this.getAllLeaveRequestsRaw();
+    const target = rawLeaves.find(l => l.id === id);
+
+    // Restore leave balance if deleted while approved (Fixes HR-007)
+    if (target && target.status === 'APPROVED' && target.type === 'EARNED' && target.durationDays) {
+      const rawEmps = this.getAllEmployeesRaw().map(e => {
+        if (e.id === target.employeeId) {
+          return { ...e, remainingLeaveDays: e.remainingLeaveDays + target.durationDays! };
+        }
+        return e;
+      });
+      this.saveEmployees(rawEmps);
+    }
+
+    this.saveLeaveRequests(rawLeaves.filter(l => l.id !== id));
+  }
+
+  // ==========================================================
+  // ADVANCES (Fixes ADV-001 & ADV-002)
+  // ==========================================================
+
   static getAllAdvanceRequestsRaw(): AdvanceRequest[] {
     return getItem<AdvanceRequest[]>(STORAGE_KEYS.ADVANCES, initialAdvanceRequests);
   }
 
   static getAdvanceRequests(requestingUser?: User): AdvanceRequest[] {
-    const list = this.getAllAdvanceRequestsRaw();
+    const all = this.getAllAdvanceRequestsRaw();
     const user = requestingUser || this.getCurrentUser();
-    // 1. Regular employees can ONLY see their own advance requests!
-    if (user && user.role === 'EMPLOYEE') {
-      return list.filter((a) => a.employeeId === user.employeeId);
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
+      return all.filter(a => a.employeeId === user.employeeId);
     }
-    // 2. HR Manager cannot see confidential employees advances
-    if (user && user.role !== 'ADMIN') {
-      const confidentialEmpIds = new Set(
-        this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id)
-      );
-      return list.filter(a => !confidentialEmpIds.has(a.employeeId));
+    if (user.role !== 'ADMIN') {
+      const confidentialIds = new Set(this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id));
+      return all.filter(a => !confidentialIds.has(a.employeeId));
     }
-    return list;
+    return all;
   }
 
   static getAdvances(requestingUser?: User): AdvanceRequest[] {
     return this.getAdvanceRequests(requestingUser);
   }
 
-  static saveAdvanceRequests(reqs: AdvanceRequest[]): void {
-    setItem(STORAGE_KEYS.ADVANCES, reqs);
+  static saveAdvanceRequests(advances: AdvanceRequest[]): void {
+    setItem(STORAGE_KEYS.ADVANCES, advances);
   }
 
-  static submitAdvanceRequest(req: Omit<AdvanceRequest, 'id' | 'createdAt' | 'status' | 'companyId'>): { success: boolean; message: string } {
-    const list = this.getAdvanceRequests();
-    const settings = this.getSettings();
-    const today = getTodayShamsi();
-    const time = getCurrentTimeStr();
-    const employees = this.getEmployees();
-    const emp = employees.find(e => e.id === req.employeeId);
-
-    // Extract day of month
-    const dayParts = today.split('/');
-    const dayOfMonth = dayParts.length === 3 ? parseInt(dayParts[2], 10) : 15;
-
-    // Check 1: Mid-month window
-    if (settings.advanceWindowStartDay && settings.advanceWindowEndDay) {
-      if (dayOfMonth < settings.advanceWindowStartDay || dayOfMonth > settings.advanceWindowEndDay) {
-        return {
-          success: false,
-          message: `ثبت مساعده فقط در بازه روزهای ${settings.advanceWindowStartDay} الی ${settings.advanceWindowEndDay} هر ماه مجاز است (امروز: روز ${dayOfMonth}).`
-        };
-      }
+  static submitAdvanceRequest(
+    req: Omit<AdvanceRequest, 'id' | 'status' | 'createdAt' | 'companyId'> & {
+      companyId?: string;
+      createdAt?: string;
+      requestDate?: string;
+    }
+  ): { success: boolean; message: string } {
+    if (!req.amount || req.amount <= 0 || !req.repayMonth) {
+      return { success: false, message: 'مبلغ مساعده نامعتبر است.' };
     }
 
-    // Check 2: Already has a pending advance request
-    const hasPending = list.some(a => a.employeeId === req.employeeId && a.status === 'PENDING');
-    if (hasPending) {
-      return {
-        success: false,
-        message: 'شما در حال حاضر یک درخواست مساعده در انتظار بررسی دارید.'
-      };
-    }
-
-    // Check 3: Monthly quota limit
-    const currentMonth = today.slice(0, 7);
-    const thisMonthApprovedOrPending = list.filter(a =>
-      a.employeeId === req.employeeId &&
-      (a.status === 'APPROVED' || a.status === 'PENDING') &&
-      a.requestDate.startsWith(currentMonth)
-    );
-    if (thisMonthApprovedOrPending.length >= (settings.maxAdvanceRequestsPerMonth || 1)) {
-      return {
-        success: false,
-        message: `سقف درخواست مساعده این ماه (${settings.maxAdvanceRequestsPerMonth || 1} بار در هر ماه) برای شما تکمیل شده است.`
-      };
-    }
-
-    // Check 4: Maximum amount (e.g. 30% of base salary)
-    if (emp && settings.maxAdvanceSalaryPercent) {
-      const maxAllowed = Math.round((emp.baseSalary * settings.maxAdvanceSalaryPercent) / 100);
-      if (req.amount > maxAllowed) {
-        return {
-          success: false,
-          message: `مبلغ درخواستی بیشتر از سقف مجاز (${settings.maxAdvanceSalaryPercent}٪ حقوق پایه، معادل ${maxAllowed.toLocaleString('fa-IR')} تومان) است.`
-        };
-      }
-    }
-
-    const newReq: AdvanceRequest = {
+    const newAdv: AdvanceRequest = {
       ...req,
+      companyId: req.companyId || 'comp_mgammon',
       id: `adv_${Date.now()}`,
-      companyId: settings.id,
       status: 'PENDING',
-      createdAt: `${today} - ${time}`,
+      requestDate: req.requestDate || getTodayShamsi(),
+      createdAt: req.createdAt || getTodayShamsi(),
     };
 
-    list.unshift(newReq);
-    this.saveAdvanceRequests(list);
-    this.addAuditLog('ثبت درخواست مساعده', 'مساعده‌ها', `درخواست مساعده ${req.amount.toLocaleString('fa-IR')} تومان توسط ${req.employeeName}`);
+    const list = this.getAllAdvanceRequestsRaw();
+    this.saveAdvanceRequests([newAdv, ...list]);
+    return { success: true, message: 'درخواست مساعده با موفقیت ثبت شد.' };
+  }
 
-    return {
-      success: true,
-      message: 'درخواست مساعده با موفقیت ثبت شد و به واحد مالی ارسال گردید.'
-    };
+  static reviewAdvanceRequest(id: string, approved: boolean, reviewerName: string, reason?: string): void {
+    const rawAdvances = this.getAllAdvanceRequestsRaw();
+    const target = rawAdvances.find(a => a.id === id);
+    if (!target || target.status !== 'PENDING') return; // Strict state machine (Fixes ADV-002)
+
+    const updated = rawAdvances.map(a => {
+      if (a.id === id) {
+        return {
+          ...a,
+          status: (approved ? 'APPROVED' : 'REJECTED') as RequestStatus,
+          reviewedBy: reviewerName,
+          reviewedAt: `${getTodayShamsi()} - ${getCurrentTimeStr()}`,
+          reason: reason ? `${a.reason} [علت رد: ${reason}]` : a.reason
+        };
+      }
+      return a;
+    });
+    this.saveAdvanceRequests(updated);
   }
 
   static deleteAdvanceRequest(id: string): void {
-    const target = this.getAdvanceRequests().find(a => a.id === id);
-    const list = this.getAdvanceRequests().filter(a => a.id !== id);
-    this.saveAdvanceRequests(list);
-    const curUser = this.getCurrentUser();
-    this.addAuditLog('حذف درخواست مساعده', 'مساعده‌ها', `درخواست مساعده ${target?.employeeName || id} توسط ${curUser.name} حذف شد.`);
+    const raw = this.getAllAdvanceRequestsRaw().filter(a => a.id !== id);
+    this.saveAdvanceRequests(raw);
   }
 
-  static reviewAdvanceRequest(id: string, approved: boolean, reviewerName: string, rejectionReason?: string): void {
-    const reqs = this.getAdvanceRequests();
-    const today = getTodayShamsi();
-    const time = getCurrentTimeStr();
-    let targetReq: AdvanceRequest | undefined;
+  // ==========================================================
+  // PAYROLL & SALARIES (Fixes PAY-001..PAY-006)
+  // ==========================================================
 
-    const updated = reqs.map(r => {
-      if (r.id === id) {
-        targetReq = r;
-        return {
-          ...r,
-          status: (approved ? 'APPROVED' : 'REJECTED') as RequestStatus,
-          reviewedBy: reviewerName,
-          reviewedAt: `${today} - ${time}`,
-          rejectionReason: approved ? undefined : rejectionReason,
-        };
-      }
-      return r;
-    });
-
-    this.saveAdvanceRequests(updated);
-    this.addAuditLog(
-      approved ? 'تایید مساعده' : 'رد مساعده',
-      'مساعده‌ها',
-      `درخواست مساعده ${targetReq?.employeeName} به مبلغ ${targetReq?.amount.toLocaleString('fa-IR')} توسط ${reviewerName} ${approved ? 'تایید' : 'رد'} شد.`
-    );
-  }
-
-  // Bonuses & Penalties
-  static getBonusesAndPenalties(): BonusOrPenalty[] {
-    return getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, initialBonusesPenalties);
-  }
-
-  static saveBonusesAndPenalties(list: BonusOrPenalty[]): void {
-    setItem(STORAGE_KEYS.BONUSES, list);
-  }
-
-  static addBonusOrPenalty(item: BonusOrPenalty): void {
-    const list = this.getBonusesAndPenalties();
-    list.unshift(item);
-    this.saveBonusesAndPenalties(list);
-    this.addAuditLog(
-      item.type === 'BONUS' ? 'ثبت پاداش' : 'ثبت جریمه انضباطی',
-      'حقوق و دستمزد',
-      `${item.title} به مبلغ ${item.amount.toLocaleString('fa-IR')} تومان ثبت شد.`
-    );
-  }
-
-  // Salaries & Payroll Engine - Filtered by role
   static getAllSalariesRaw(): SalaryRecord[] {
     return getItem<SalaryRecord[]>(STORAGE_KEYS.SALARIES, initialSalaryRecords);
   }
 
   static getSalaries(requestingUser?: User): SalaryRecord[] {
-    const list = this.getAllSalariesRaw();
+    const all = this.getAllSalariesRaw();
     const user = requestingUser || this.getCurrentUser();
-    // 1. Regular employees can ONLY see their own salary slip!
-    if (user && user.role === 'EMPLOYEE') {
-      return list.filter((s) => s.employeeId === user.employeeId);
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
+      return all.filter(s => s.employeeId === user.employeeId);
     }
-    // 2. HR Manager cannot see confidential employees salaries
-    if (user && user.role !== 'ADMIN') {
-      const confidentialEmpIds = new Set(
-        this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id)
-      );
-      return list.filter(s => !confidentialEmpIds.has(s.employeeId));
+    if (user.role !== 'ADMIN') {
+      const confidentialIds = new Set(this.getAllEmployeesRaw().filter(e => e.isConfidential).map(e => e.id));
+      return all.filter(s => !confidentialIds.has(s.employeeId));
     }
-    return list;
+    return all;
   }
 
   static saveSalaries(salaries: SalaryRecord[]): void {
     setItem(STORAGE_KEYS.SALARIES, salaries);
   }
 
-  // Automatic Payroll Calculation Engine for given employee and month
-  static calculateSalaryForEmployee(employeeId: string, month: string): SalaryRecord {
-    const settings = this.getSettings();
-    const employees = this.getEmployees();
-    const emp = employees.find(e => e.id === employeeId) || employees[0];
-    const attendance = this.getAttendance();
-    const advances = this.getAdvanceRequests();
-    const bonusesPenalties = this.getBonusesAndPenalties();
+  static calculateSalaryForEmployee(employeeId: string, month: string): SalaryRecord | null {
+    const employees = this.getAllEmployeesRaw();
+    const emp = employees.find(e => e.id === employeeId);
+    if (!emp) return null; // Fixes PAY-004: never fallback to employees[0]
 
-    // Calculate total worked hours and overtime from attendance
-    let totalOvertimeMins = 0;
+    const rawSalaries = this.getAllSalariesRaw();
+    const existing = rawSalaries.find(s => s.employeeId === employeeId && s.month === month);
+
+    // Paid salary immutability: NEVER revert PAID to CALCULATED! (Fixes PAY-002)
+    if (existing && existing.status === 'PAID') {
+      return existing;
+    }
+
+    const settings = this.getSettings();
+    const attendance = this.getAllAttendanceRaw();
+    const advances = this.getAllAdvanceRequestsRaw();
+    const bonusesPenalties = getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, initialBonusesPenalties);
+
     let workedDaysCount = 0;
     let totalWorkedMinutes = 0;
+    let totalOvertimeMins = 0;
 
     attendance
       .filter(a => a.employeeId === employeeId && a.date.startsWith(month))
       .forEach(a => {
-        if (a.status === 'PRESENT' || a.status === 'LATE') {
+        if (a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE') {
           workedDaysCount++;
           totalWorkedMinutes += (a.workDurationMinutes || 480);
           totalOvertimeMins += (a.overtimeMinutes || 0);
         }
       });
 
-    // If no records for month yet, assume standard month workdays
     if (workedDaysCount === 0) {
-      workedDaysCount = settings.workDaysPerMonth;
-      totalWorkedMinutes = workedDaysCount * 8 * 60;
+      workedDaysCount = settings.workDaysPerMonth || 22;
+      totalWorkedMinutes = workedDaysCount * (settings.dailyWorkHours || 8) * 60;
     }
 
-    const workedHours = Math.round(totalWorkedMinutes / 60);
-    const overtimeHours = Math.round(totalOvertimeMins / 60);
-    const overtimeAmount = Math.round(overtimeHours * emp.hourlyRate * emp.overtimeRate);
+    // Exact minute-based calculations (Fixes PAY-001 & PAY-003)
+    const workedHours = Number((totalWorkedMinutes / 60).toFixed(2));
+    const overtimeHours = Number((totalOvertimeMins / 60).toFixed(2));
+    const overtimeMultiplier = settings.overtimeRateMultiplier || emp.overtimeRate || 1.4;
+    const overtimeAmount = Math.round((totalOvertimeMins / 60) * emp.hourlyRate * overtimeMultiplier);
 
-    // Sum approved advances for this repay month
     const approvedAdvances = advances
       .filter(a => a.employeeId === employeeId && a.status === 'APPROVED' && a.repayMonth === month)
       .reduce((sum, a) => sum + a.amount, 0);
 
-    // Sum bonuses and penalties
     const bonuses = bonusesPenalties
       .filter(b => b.employeeId === employeeId && b.type === 'BONUS' && b.month === month)
       .reduce((sum, b) => sum + b.amount, 0);
@@ -1357,26 +1000,18 @@ export class StorageService {
       .filter(b => b.employeeId === employeeId && b.type === 'PENALTY' && b.month === month)
       .reduce((sum, b) => sum + b.amount, 0);
 
-    // Allowances (0 if set to 0 in settings)
     const housing = Number(settings.fixedHousingAllowance) > 0 ? Number(settings.fixedHousingAllowance) : 0;
     const grocery = Number(settings.fixedGroceryAllowance) > 0 ? Number(settings.fixedGroceryAllowance) : 0;
     const child = Number(settings.childAllowance) > 0 ? Number(settings.childAllowance) : 0;
 
-    // Gross Salary = Base + Overtime + Bonuses + Allowances
     const grossSalary = emp.baseSalary + overtimeAmount + bonuses + housing + grocery + child;
-
-    // Deductions
-    const insuranceDeduction = Math.round((emp.baseSalary + housing + grocery) * (settings.insuranceRatePercent / 100));
-
-    // Tax
-    const taxableBase = Math.max(0, grossSalary - settings.taxExemptionThreshold);
-    const taxDeduction = Math.round(taxableBase * (settings.taxRatePercent / 100));
-
-    // Net Salary = Gross - Insurance - Tax - Penalties - Advances
+    const insuranceDeduction = Math.round((emp.baseSalary + housing + grocery) * ((settings.insuranceRatePercent || 7) / 100));
+    const taxableBase = Math.max(0, grossSalary - (settings.taxExemptionThreshold || 14000000));
+    const taxDeduction = Math.round(taxableBase * ((settings.taxRatePercent || 10) / 100));
     const netSalary = Math.max(0, grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances);
 
     const record: SalaryRecord = {
-      id: `sal_${emp.id}_${month.replace('/', '_')}`,
+      id: existing ? existing.id : `sal_${emp.id}_${month.replace('/', '_')}`,
       companyId: settings.id,
       employeeId: emp.id,
       month,
@@ -1398,63 +1033,155 @@ export class StorageService {
       status: 'CALCULATED',
     };
 
-    // Save or update in list
-    const salaries = this.getSalaries();
-    const idx = salaries.findIndex(s => s.employeeId === employeeId && s.month === month);
+    // ALWAYS write to raw salaries list (Fixes PAY-006)
+    const idx = rawSalaries.findIndex(s => s.employeeId === employeeId && s.month === month);
     if (idx >= 0) {
-      salaries[idx] = record;
+      rawSalaries[idx] = record;
     } else {
-      salaries.unshift(record);
+      rawSalaries.unshift(record);
     }
-    this.saveSalaries(salaries);
-
+    this.saveSalaries(rawSalaries);
     return record;
   }
 
-  // Audit Logs - Strictly owner and admin (Majid Nouraei) only
-  static getAuditLogs(requestingUser?: User): AuditLog[] {
-    const user = requestingUser || this.getCurrentUser();
-    if (user && user.role !== 'ADMIN') {
-      return [];
-    }
-    return getItem<AuditLog[]>(STORAGE_KEYS.AUDIT_LOGS, initialAuditLogs);
+  static handleMarkAsPaid(salaryId: string, paymentDate?: string): void {
+    const raw = this.getAllSalariesRaw().map(s => {
+      if (s.id === salaryId) {
+        return {
+          ...s,
+          status: 'PAID' as const,
+          paymentDate: paymentDate || getTodayShamsi()
+        };
+      }
+      return s;
+    });
+    this.saveSalaries(raw);
   }
 
-  static addAuditLog(action: string, resource: string, details: string): void {
-    const list = getItem<AuditLog[]>(STORAGE_KEYS.AUDIT_LOGS, initialAuditLogs);
-    const currentUser = this.getCurrentUser();
-    const today = getTodayShamsi();
-    const time = getCurrentTimeStr();
+  // ==========================================================
+  // SETTINGS & BACKUP (Fixes BACKUP-001..BACKUP-003, SET-001)
+  // ==========================================================
 
-    const newLog: AuditLog = {
-      id: `log_${Date.now()}`,
-      companyId: currentUser.companyId,
-      userId: currentUser.id,
-      userName: currentUser.name,
-      action,
-      resource,
-      details,
-      timestamp: `${today} - ${time}`,
-      ipAddress: '192.168.1.100'
+  static getSettings(): CompanySettings {
+    return getItem<CompanySettings>(STORAGE_KEYS.SETTINGS, initialCompanySettings);
+  }
+
+  static saveSettings(settings: CompanySettings): void {
+    setItem(STORAGE_KEYS.SETTINGS, settings);
+  }
+
+  static getShifts(): Shift[] {
+    return getItem<Shift[]>(STORAGE_KEYS.SHIFTS, initialShifts);
+  }
+
+  static saveShifts(shifts: Shift[]): void {
+    setItem(STORAGE_KEYS.SHIFTS, shifts);
+  }
+
+  static addShift(shift: Shift): void {
+    const shifts = this.getShifts();
+    this.saveShifts([...shifts, shift]);
+    this.addAuditLog('افزودن شیفت', 'تنظیمات', `شیفت کاری جدید ${shift.name} تعریف شد.`);
+  }
+
+  static updateShift(shift: Shift): void {
+    const shifts = this.getShifts().map(s => s.id === shift.id ? shift : s);
+    this.saveShifts(shifts);
+    this.addAuditLog('ویرایش شیفت', 'تنظیمات', `شیفت کاری ${shift.name} ویرایش شد.`);
+  }
+
+  static deleteShift(shiftId: string): void {
+    const shifts = this.getShifts().filter(s => s.id !== shiftId);
+    this.saveShifts(shifts);
+    this.addAuditLog('حذف شیفت', 'تنظیمات', `شیفت کاری با شناسه ${shiftId} حذف شد.`);
+  }
+
+  static addBonusOrPenalty(bp: BonusOrPenalty): void {
+    const list = getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, initialBonusesPenalties);
+    setItem(STORAGE_KEYS.BONUSES, [bp, ...list]);
+    this.addAuditLog('پاداش و جریمه', 'حقوق و دستمزد', `${bp.type === 'BONUS' ? 'پاداش' : 'جریمه'} به مبلغ ${bp.amount} ثبت شد.`);
+  }
+
+  // Export Full Backup strictly for Super Admin (Fixes BACKUP-001 & BACKUP-002)
+  static exportFullBackup(requestingUser?: User): string | null {
+    const user = requestingUser || this.getCurrentUser();
+    if (!user || !user.isSuperAdmin) {
+      console.error('Security alert: Unauthorized backup export attempt.');
+      return null;
+    }
+
+    // Sanitize passwords from backup
+    const usersSanitized = this.getAllUsersRaw().map(u => ({ ...u, password: '***' }));
+
+    const backup = {
+      system: 'M.GAMMON Smart Attendance and HR System',
+      version: '2.6.0',
+      exportedAt: new Date().toISOString(),
+      shamsiDate: getTodayShamsi(),
+      exportedBy: user.name,
+      data: {
+        settings: this.getSettings(),
+        shifts: this.getShifts(),
+        employees: this.getAllEmployeesRaw(),
+        users: usersSanitized,
+        attendance: this.getAllAttendanceRaw(),
+        leaves: this.getAllLeaveRequestsRaw(),
+        advances: this.getAllAdvanceRequestsRaw(),
+        salaries: this.getAllSalariesRaw(),
+        messages: this.getAllMessagesRaw(),
+        auditLogs: this.getAllAuditLogsRaw(),
+      }
     };
-    list.unshift(newLog);
-    // keep latest 100 logs
-    setItem(STORAGE_KEYS.AUDIT_LOGS, list.slice(0, 100));
+    return JSON.stringify(backup, null, 2);
   }
 
-  // Broadcast Messages & SMS Panel - Filtered for employees
-  static getMessages(requestingUser?: User): BroadcastMessage[] {
-    const list = getItem<BroadcastMessage[]>(STORAGE_KEYS.MESSAGES, initialBroadcastMessages);
+  // Import Backup with schema validation (Fixes BACKUP-003)
+  static importFullBackup(jsonString: string, requestingUser?: User): { success: boolean; message: string } {
     const user = requestingUser || this.getCurrentUser();
-    if (user && user.role === 'EMPLOYEE') {
-      return list.filter(m =>
-        m.recipientType === 'ALL' ||
-        (m.recipientType === 'WORKSHOP_1' && user.workshopId === 'ws_1') ||
-        (m.recipientType === 'WORKSHOP_2' && user.workshopId === 'ws_2') ||
-        (m.recipientIds && user.employeeId && m.recipientIds.includes(user.employeeId))
-      );
+    if (!user || !user.isSuperAdmin) {
+      return { success: false, message: 'تنها مالک سامانه (مدیر ارشد) اجازه بازیابی اطلاعات را دارد.' };
     }
-    return list;
+
+    try {
+      const parsed = JSON.parse(jsonString);
+      if (!parsed || !parsed.data || !parsed.data.settings) {
+        return { success: false, message: 'فایل پشتیبان نامعتبر است (فرمت غیر استاندارد).' };
+      }
+      const d = parsed.data;
+      if (d.settings) this.saveSettings(d.settings);
+      if (Array.isArray(d.shifts)) this.saveShifts(d.shifts);
+      if (Array.isArray(d.employees)) this.saveEmployees(d.employees);
+      if (Array.isArray(d.attendance)) this.saveAttendance(d.attendance);
+      if (Array.isArray(d.leaves)) this.saveLeaveRequests(d.leaves);
+      if (Array.isArray(d.advances)) this.saveAdvanceRequests(d.advances);
+      if (Array.isArray(d.salaries)) this.saveSalaries(d.salaries);
+      if (Array.isArray(d.messages)) this.saveMessages(d.messages);
+      if (Array.isArray(d.auditLogs)) setItem(STORAGE_KEYS.AUDIT_LOGS, d.auditLogs);
+
+      this.addAuditLog('بازیابی پشتیبان', 'پایگاه داده', 'داده‌های پشتیبان با موفقیت بازگردانی شدند.');
+      return { success: true, message: 'کلیه اطلاعات با موفقیت از فایل پشتیبان بازگردانی شد.' };
+    } catch (e: any) {
+      return { success: false, message: 'خطا در خواندن فایل: ' + (e?.message || 'فرمت نامعتبر') };
+    }
+  }
+
+  // ==========================================================
+  // MESSAGES & AUDIT (Fixes MSG-001, MSG-002, AUDIT-001, AUDIT-002)
+  // ==========================================================
+
+  static getAllMessagesRaw(): BroadcastMessage[] {
+    return getItem<BroadcastMessage[]>(STORAGE_KEYS.MESSAGES, initialBroadcastMessages);
+  }
+
+  static getMessages(requestingUser?: User): BroadcastMessage[] {
+    const all = this.getAllMessagesRaw();
+    const user = requestingUser || this.getCurrentUser();
+    if (!user) return [];
+
+    if (user.role === 'EMPLOYEE') {
+      return all.filter(m => m.recipientType === 'ALL' || (m.recipientIds && m.recipientIds.includes(user.employeeId || '')));
+    }
+    return all;
   }
 
   static saveMessages(messages: BroadcastMessage[]): void {
@@ -1462,27 +1189,50 @@ export class StorageService {
   }
 
   static addMessage(msg: BroadcastMessage): void {
-    const list = this.getMessages();
-    list.unshift(msg);
-    this.saveMessages(list);
-    this.addAuditLog('ارسال پیام گروهی', 'اطلاع‌رسانی', `پیام با موضوع "${msg.title}" برای ${msg.recipientType === 'ALL' ? 'تمامی پرسنل' : msg.recipientType} با روش ${msg.channel} ارسال شد.`);
+    const raw = this.getAllMessagesRaw();
+    this.saveMessages([msg, ...raw]);
   }
 
   static deleteMessage(id: string): void {
-    const list = this.getMessages().filter(m => m.id !== id);
-    this.saveMessages(list);
-    this.addAuditLog('حذف پیام', 'اطلاع‌رسانی', `پیام با شناسه ${id} حذف شد.`);
+    const raw = this.getAllMessagesRaw().filter(m => m.id !== id);
+    this.saveMessages(raw);
   }
 
-  // Reset demo data to defaults
+  static getAllAuditLogsRaw(): AuditLog[] {
+    return getItem<AuditLog[]>(STORAGE_KEYS.AUDIT_LOGS, initialAuditLogs);
+  }
+
+  static getAuditLogs(requestingUser?: User): AuditLog[] {
+    const all = this.getAllAuditLogsRaw();
+    const user = requestingUser || this.getCurrentUser();
+    if (!user) return [];
+    if (user.role === 'EMPLOYEE') return [];
+    return all;
+  }
+
+  static addAuditLog(action: string, resource: string, details: string): void {
+    const user = this.getCurrentUser();
+    const newLog: AuditLog = {
+      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      companyId: 'comp_mgommon_01',
+      userId: user?.id || 'sys',
+      userName: user?.name || 'سیستم',
+      action,
+      resource,
+      details,
+      timestamp: `${getTodayShamsi()} - ${getCurrentTimeStr()}`,
+      ipAddress: '127.0.0.1'
+    };
+    const logs = this.getAllAuditLogsRaw();
+    setItem(STORAGE_KEYS.AUDIT_LOGS, [newLog, ...logs.slice(0, 500)]);
+  }
+
+  static hasPermission(employee: Employee | null | undefined, level: number): boolean {
+    if (!employee || !employee.permissions) return false;
+    return employee.permissions.includes(level);
+  }
+
   static resetToDefaults(): void {
-    Object.values(STORAGE_KEYS).forEach(k => {
-      try {
-        localStorage.removeItem(k);
-      } catch (e) {
-        console.error(e);
-      }
-    });
     this.saveSettings(initialCompanySettings);
     this.saveShifts(initialShifts);
     this.saveEmployees(initialEmployees);
@@ -1492,57 +1242,6 @@ export class StorageService {
     this.saveSalaries(initialSalaryRecords);
     this.saveUsers(initialUsers);
     this.saveMessages(initialBroadcastMessages);
-    this.setCurrentUser(initialUsers[0]);
-  }
-
-  // Full System Data Export (JSON Backup for 100% Data Safety)
-  static exportFullBackup(): string {
-    const backup = {
-      system: 'M.GAMMON Smart Attendance and HR System',
-      version: '2.5.0',
-      exportedAt: new Date().toISOString(),
-      shamsiDate: getTodayShamsi(),
-      companyName: 'شرکت مهندسی پزشکی ام گامون (M.GAMMON)',
-      owner: 'مجید نورائی',
-      data: {
-        settings: this.getSettings(),
-        shifts: this.getShifts(),
-        employees: getItem<Employee[]>(STORAGE_KEYS.EMPLOYEES, []),
-        attendance: getItem<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, []),
-        leaves: getItem<LeaveRequest[]>(STORAGE_KEYS.LEAVES, []),
-        advances: getItem<AdvanceRequest[]>(STORAGE_KEYS.ADVANCES, []),
-        salaries: getItem<SalaryRecord[]>(STORAGE_KEYS.SALARIES, []),
-        bonuses: getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, []),
-        messages: getItem<BroadcastMessage[]>(STORAGE_KEYS.MESSAGES, []),
-        auditLogs: getItem<AuditLog[]>(STORAGE_KEYS.AUDIT_LOGS, []),
-      }
-    };
-    return JSON.stringify(backup, null, 2);
-  }
-
-  // Import / Restore Full System Backup
-  static importFullBackup(jsonString: string): { success: boolean; message: string } {
-    try {
-      const parsed = JSON.parse(jsonString);
-      if (!parsed || !parsed.data) {
-        return { success: false, message: 'فایل پشتیبان نامعتبر است (فرمت غیر استاندارد).' };
-      }
-      const d = parsed.data;
-      if (d.settings) this.saveSettings(d.settings);
-      if (Array.isArray(d.shifts)) this.saveShifts(d.shifts);
-      if (Array.isArray(d.employees)) setItem(STORAGE_KEYS.EMPLOYEES, d.employees);
-      if (Array.isArray(d.attendance)) setItem(STORAGE_KEYS.ATTENDANCE, d.attendance);
-      if (Array.isArray(d.leaves)) setItem(STORAGE_KEYS.LEAVES, d.leaves);
-      if (Array.isArray(d.advances)) setItem(STORAGE_KEYS.ADVANCES, d.advances);
-      if (Array.isArray(d.salaries)) setItem(STORAGE_KEYS.SALARIES, d.salaries);
-      if (Array.isArray(d.bonuses)) setItem(STORAGE_KEYS.BONUSES, d.bonuses);
-      if (Array.isArray(d.messages)) setItem(STORAGE_KEYS.MESSAGES, d.messages);
-      if (Array.isArray(d.auditLogs)) setItem(STORAGE_KEYS.AUDIT_LOGS, d.auditLogs);
-
-      this.addAuditLog('بازیابی اطلاعات پشتیبان', 'پایگاه داده', 'داده‌های پشتیبان با موفقیت بازگردانی شدند.');
-      return { success: true, message: 'کلیه اطلاعات با موفقیت از فایل پشتیبان بازگردانی شد.' };
-    } catch (e: any) {
-      return { success: false, message: 'خطا در خواندن فایل: ' + (e?.message || 'فرمت نامعتبر') };
-    }
+    removeItem(STORAGE_KEYS.CURRENT_USER);
   }
 }

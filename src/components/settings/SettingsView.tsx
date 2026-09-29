@@ -16,7 +16,8 @@ import {
   Image as ImageIcon,
   Database,
   Download,
-  AlertCircle
+  AlertCircle,
+  Shield
 } from 'lucide-react';
 import { CompanySettings, AuditLog, Workshop, User } from '../../types';
 import { StorageService } from '../../services/storage';
@@ -92,6 +93,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleExportBackup = () => {
     const jsonStr = StorageService.exportFullBackup();
+    if (!jsonStr) {
+      setBackupStatus({ type: 'error', message: 'خطا در صدور نسخه پشتیبان یا عدم دسترسی مجاز.' });
+      return;
+    }
     const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -712,28 +717,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             )}
 
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={handleExportBackup}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors shadow-xs cursor-pointer"
-              >
-                <Download className="w-4 h-4" />
-                <span>دانلود پشتیبان کامل پایگاه‌داده (JSON)</span>
-              </button>
+            {currentUser?.isSuperAdmin ? (
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handleExportBackup}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs transition-colors shadow-xs cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>دانلود پشتیبان کامل پایگاه‌داده (JSON)</span>
+                </button>
 
-              <label className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors border border-slate-200 cursor-pointer">
-                <Upload className="w-4 h-4 text-slate-500" />
-                <span>بازیابی اطلاعات از فایل پشتیبان</span>
-                <input
-                  type="file"
-                  accept=".json"
-                  className="hidden"
-                  onChange={handleImportBackup}
-                  disabled={!canEdit}
-                />
-              </label>
-            </div>
+                <label className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors border border-slate-200 cursor-pointer">
+                  <Upload className="w-4 h-4 text-slate-500" />
+                  <span>بازیابی اطلاعات از فایل پشتیبان</span>
+                  <input
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleImportBackup}
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="p-3 bg-amber-50 rounded-xl text-amber-800 text-xs flex items-center gap-2 border border-amber-200">
+                <Shield className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>دسترسی دانلود نسخه پشتیبان کامل و بازیابی پایگاه‌داده منحصراً در اختیارات مالک و مدیر ارشد می‌باشد.</span>
+              </div>
+            )}
           </div>
 
           {canEdit && (
