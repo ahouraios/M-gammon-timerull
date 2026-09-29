@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Role, User } from '../../types';
 import { NavTab } from './Sidebar';
+import { DeveloperBadge } from './DeveloperBadge';
 
 interface MobileNavProps {
   activeTab: NavTab;
@@ -276,10 +277,11 @@ export const MobileNav: React.FC<MobileNavProps> = ({
             )}
 
             {/* Footer Branding in Drawer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 text-center">
-              <span className="text-xs text-slate-500 font-medium inline-block">
+            <div className="p-3.5 bg-slate-50 border-t border-slate-200 text-center space-y-2">
+              <span className="text-[11px] text-slate-500 font-medium inline-block">
                 M.GAMMON Smart HRM System
               </span>
+              <DeveloperBadge variant="menu" />
             </div>
           </div>
         </div>

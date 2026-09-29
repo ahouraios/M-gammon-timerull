@@ -34,6 +34,7 @@ import {
 } from '../../utils/dateUtils';
 import { NavTab } from '../common/Sidebar';
 import { CameraQrScannerModal } from '../attendance/CameraQrScannerModal';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface EmployeePortalViewProps {
   currentUser: User;
@@ -649,6 +650,9 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Footer Signature */}
+      <DeveloperBadge variant="footer" className="pt-6 pb-2" />
 
       {/* Manual Attendance Request Modal (Fixes ATT-001) */}
       {isManualModalOpen && (

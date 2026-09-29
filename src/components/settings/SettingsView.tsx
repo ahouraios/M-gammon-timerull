@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CompanySettings, AuditLog, Workshop, User } from '../../types';
 import { StorageService } from '../../services/storage';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface SettingsViewProps {
   settings: CompanySettings;
@@ -746,6 +747,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             )}
           </div>
+
+          {/* System & Developer Info Card */}
+          <DeveloperBadge variant="card" />
 
           {canEdit && (
             <div className="flex justify-end pt-2">

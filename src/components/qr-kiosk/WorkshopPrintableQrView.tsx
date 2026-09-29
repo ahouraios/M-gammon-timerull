@@ -17,6 +17,7 @@ import { Workshop, Employee, AttendanceRecord, Shift } from '../../types';
 import { StorageService } from '../../services/storage';
 import { CameraQrScannerModal } from '../attendance/CameraQrScannerModal';
 import { BeautifulQrCode } from '../common/BeautifulQrCode';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface WorkshopPrintableQrViewProps {
   employees: Employee[];
@@ -238,6 +239,9 @@ export const WorkshopPrintableQrView: React.FC<WorkshopPrintableQrViewProps> = (
           <div className="font-mono text-slate-400">BOARD-CODE: MG-{selectedWorkshop.code}-PRINT</div>
         </div>
       </div>
+
+      {/* Developer Branding */}
+      <DeveloperBadge variant="footer" className="mt-4 print:hidden" />
 
       {/* Camera QR & GPS Scanner Modal for live scanning */}
       <CameraQrScannerModal

@@ -32,6 +32,7 @@ import {
   getTodayShamsiDetailed,
 } from '../../utils/dateUtils';
 import { NavTab } from '../common/Sidebar';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface DashboardViewProps {
   currentUser?: User;
@@ -361,6 +362,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Management Dashboard System & Developer Info */}
+      <DeveloperBadge variant="card" />
     </div>
   );
 };

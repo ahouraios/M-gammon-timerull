@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { Shield } from 'lucide-react';
 import { Header } from './components/common/Header';
 import { Sidebar, NavTab } from './components/common/Sidebar';
 import { MobileNav } from './components/common/MobileNav';
+import { DeveloperBadge } from './components/common/DeveloperBadge';
 import { LoginView } from './components/auth/LoginView';
 
 // Views
@@ -39,7 +40,6 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => StorageService.getCurrentUser());
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
   // Core Data
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -103,17 +103,6 @@ export default function App() {
     setCurrentUser(null);
   };
 
-  const handleResetData = () => {
-    setIsResetModalOpen(true);
-  };
-
-  const handleConfirmReset = () => {
-    StorageService.resetToDefaults();
-    loadData();
-    setCurrentUser(StorageService.getCurrentUser());
-    setIsResetModalOpen(false);
-  };
-
   // If not logged in, show dedicated LoginView
   if (!currentUser) {
     return (
@@ -146,7 +135,6 @@ export default function App() {
         currentUser={currentUser}
         onUserChange={handleUserChange}
         onLogout={handleLogout}
-        onResetData={handleResetData}
         onNavigateToRequests={() => setActiveTab('leaves')}
         onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
         pendingRequestsCount={pendingLeaves + pendingAdvances}
@@ -168,8 +156,8 @@ export default function App() {
             }}
             className="bg-white text-slate-900 hover:bg-amber-50 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer shrink-0 border border-white/60 active:scale-98"
           >
-            <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
-            <span>بازگشت فوری به حساب مدیریت ارشد (مجید نورائی)</span>
+            <Shield className="w-3.5 h-3.5 text-indigo-600" />
+            <span>بازگشت به حساب مدیریت ارشد (مجید نورائی)</span>
           </button>
         </div>
       )}
@@ -346,48 +334,9 @@ export default function App() {
             <span className="text-slate-500">کارگاه تولید تخته‌نرد مشهد (توس ۱۴۲)</span>
           </div>
 
-          <div className="flex items-center gap-1 text-slate-500 text-xs">
-            <span>طراحی و توسعه توسط</span>
-            <a
-              href="https://ahourai.ir"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-bold text-indigo-600 hover:text-indigo-800 transition-colors inline-flex items-center gap-1"
-            >
-              <span>اهورایی</span>
-              <span className="text-rose-500">❤️</span>
-            </a>
-          </div>
+          <DeveloperBadge variant="footer" />
         </div>
       </footer>
-
-      {/* In-app Reset Confirmation Modal */}
-      {isResetModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full border border-slate-200 p-5 space-y-4 shadow-2xl animate-in fade-in duration-150">
-            <h3 className="text-sm font-bold text-slate-800">بازنشانی اطلاعات پیش‌فرض</h3>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              آیا از بازنشانی داده‌های نمونه سامانه M.GAMMON به مقادیر اولیه اطمینان دارید؟ کلیه تغییرات ثبت شده به حالت اولیه بازخواهند گشت.
-            </p>
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setIsResetModalOpen(false)}
-                className="px-3.5 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 cursor-pointer"
-              >
-                انصراف
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmReset}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer shadow-xs"
-              >
-                تایید بازنشانی
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

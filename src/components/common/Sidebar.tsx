@@ -18,6 +18,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { Role } from '../../types';
+import { DeveloperBadge } from './DeveloperBadge';
 
 export type NavTab =
   | 'dashboard'
@@ -163,8 +164,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* Footer Branding in Sidebar */}
-      <div className="pt-4 border-t border-slate-100">
-        <div className="p-3 bg-slate-50/80 rounded-2xl border border-slate-200/60 text-center">
+      <div className="pt-3 border-t border-slate-100 space-y-2">
+        <div className="p-2.5 bg-slate-50/80 rounded-xl border border-slate-200/60 text-center">
           <div className="text-xs text-slate-800 font-bold tracking-wider">
             M.GAMMON
           </div>
@@ -172,6 +173,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             مشهد، توس ۱۴۲، حسین زاده ۸
           </div>
         </div>
+        <DeveloperBadge variant="menu" />
       </div>
     </aside>
   );

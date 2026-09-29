@@ -20,6 +20,7 @@ import {
   formatNumberFa
 } from '../../utils/dateUtils';
 import { BeautifulQrCode } from '../common/BeautifulQrCode';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface DynamicQrKioskViewProps {
   employees: Employee[];
@@ -566,6 +567,9 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
               </span>
             </button>
           </div>
+
+          {/* Signature */}
+          <DeveloperBadge variant="footer" className="pt-2" />
         </div>
       </div>
     </div>

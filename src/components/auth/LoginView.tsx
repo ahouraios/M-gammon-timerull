@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { User } from '../../types';
 import { StorageService } from '../../services/storage';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface LoginViewProps {
   onLogin: (user: User) => void;
@@ -160,12 +161,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </form>
         </div>
 
-        {/* Security Footer */}
-        <div className="bg-slate-50 p-4 border-t border-slate-100 text-center">
+        {/* Security & Developer Footer */}
+        <div className="bg-slate-50 p-4 border-t border-slate-100 text-center space-y-2">
           <p className="text-[11px] text-slate-500 flex items-center justify-center gap-1">
             <Lock className="w-3.5 h-3.5 text-slate-400" />
             <span>ارتباط امن با پروتکل رمزنگاری و حفاظت از حریم خصوصی پرسنل</span>
           </p>
+          <DeveloperBadge variant="footer" />
         </div>
       </div>
     </div>

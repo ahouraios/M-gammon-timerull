@@ -15,6 +15,7 @@ import {
   formatCurrencyTomans,
   getTodayShamsiDetailed
 } from '../../utils/dateUtils';
+import { DeveloperBadge } from '../common/DeveloperBadge';
 
 interface PayrollViewProps {
   salaries: SalaryRecord[];
@@ -592,6 +593,8 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                   </button>
                 </div>
               )}
+
+              <DeveloperBadge variant="footer" className="pt-3" />
             </div>
           </div>
         </div>

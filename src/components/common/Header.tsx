@@ -7,7 +7,6 @@ import {
   Shield,
   Briefcase,
   ChevronDown,
-  RotateCcw,
   Building2,
   Menu,
   KeyRound,
@@ -25,12 +24,12 @@ import {
 import { User, Role, CompanySettings } from '../../types';
 import { getTodayShamsiDetailed } from '../../utils/dateUtils';
 import { StorageService } from '../../services/storage';
+import { DeveloperBadge } from './DeveloperBadge';
 
 interface HeaderProps {
   currentUser: User;
   onUserChange: (user: User) => void;
   onLogout?: () => void;
-  onResetData?: () => void;
   pendingRequestsCount: number;
   onNavigateToRequests?: () => void;
   onToggleMobileMenu?: () => void;
@@ -41,7 +40,6 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onUserChange,
   onLogout,
-  onResetData,
   pendingRequestsCount,
   onNavigateToRequests,
   onToggleMobileMenu,
@@ -261,17 +259,6 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </button>
 
-            {/* Reset Demo Data Button */}
-            {onResetData && (
-              <button
-                onClick={onResetData}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                title="بازنشانی اطلاعات پیش‌فرض سامانه"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
-            )}
-
             <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block" />
 
             {/* Switch User / Role Dropdown */}
@@ -363,6 +350,10 @@ export const Header: React.FC<HeaderProps> = ({
                         <span>خروج از حساب کاربری</span>
                       </button>
                     )}
+
+                    <div className="pt-2 text-center border-t border-slate-100 flex justify-center">
+                      <DeveloperBadge variant="compact" />
+                    </div>
                   </div>
                 </div>
               )}
