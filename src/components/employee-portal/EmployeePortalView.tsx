@@ -13,7 +13,8 @@ import {
   ShieldCheck,
   Zap,
   Lock,
-  ShieldAlert
+  ShieldAlert,
+  Fingerprint
 } from 'lucide-react';
 import {
   Employee,
@@ -78,6 +79,22 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   const [manualType, setManualType] = useState<'IN' | 'OUT'>('IN');
   const [manualTime, setManualTime] = useState(getCurrentTimeStr());
   const [manualReason, setManualReason] = useState('');
+  const [bioRegisterMsg, setBioRegisterMsg] = useState<{ success: boolean; text: string } | null>(null);
+  const [isRegisteringBio, setIsRegisteringBio] = useState(false);
+
+  const handleRegisterBiometric = async () => {
+    setIsRegisteringBio(true);
+    setBioRegisterMsg(null);
+    try {
+      const res = await StorageService.registerBiometricAsync();
+      setBioRegisterMsg({ success: res.success, text: res.message });
+      setTimeout(() => setBioRegisterMsg(null), 5000);
+    } catch {
+      setBioRegisterMsg({ success: false, text: 'خطا در برقراری ارتباط با حسگر اثر انگشت.' });
+    } finally {
+      setIsRegisteringBio(false);
+    }
+  };
 
   const [avatarPreview, setAvatarPreview] = useState<string | null>(
     currentEmployee?.avatarUrl || null
@@ -307,6 +324,17 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
+            onClick={handleRegisterBiometric}
+            disabled={isRegisteringBio}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-700"
+            title="ثبت اثر انگشت دستگاه فعلی جهت ورود سریع بدون کلمه عبور"
+          >
+            <Fingerprint className="w-4 h-4 text-amber-400" />
+            <span>{isRegisteringBio ? 'در حال ثبت...' : 'ثبت اثر انگشت این دستگاه'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setIsCameraScannerOpen(true)}
             disabled={!canClock}
             className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${
@@ -320,6 +348,27 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           </button>
         </div>
       </div>
+
+      {bioRegisterMsg && (
+        <div
+          className={`p-3.5 rounded-2xl text-xs flex items-center justify-between gap-2 border ${
+            bioRegisterMsg.success
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Fingerprint className="w-4 h-4 shrink-0 text-amber-600" />
+            <span className="font-medium">{bioRegisterMsg.text}</span>
+          </div>
+          <button
+            onClick={() => setBioRegisterMsg(null)}
+            className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Quick Clock-In / Clock-Out Widget */}
       <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-6 rounded-3xl shadow-lg border border-slate-800">

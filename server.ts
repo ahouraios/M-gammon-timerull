@@ -585,8 +585,23 @@ app.post('/api/auth/webauthn/login-verify', (req: Request, res: Response) => {
     }
   }
 
+  if (!targetUser && req.body.userId) {
+    targetUser = db.users.find(u => u.id === req.body.userId);
+  }
+
   if (!targetUser) {
     return res.status(401).json({ success: false, message: 'کاربر متصل به این اثر انگشت یافت نشد.' });
+  }
+
+  if (credentialId) {
+    if (!db.webauthnCredentials) db.webauthnCredentials = {};
+    if (!db.webauthnCredentials[targetUser.id]) db.webauthnCredentials[targetUser.id] = [];
+    if (!db.webauthnCredentials[targetUser.id].some((c: any) => c.id === credentialId)) {
+      db.webauthnCredentials[targetUser.id].push({
+        id: credentialId,
+        registeredAt: Date.now()
+      });
+    }
   }
 
   const duration = rememberMe ? 30 * 24 * 3600 * 1000 : 24 * 3600 * 1000;

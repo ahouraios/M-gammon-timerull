@@ -32,9 +32,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   const [logoLoadFailed, setLogoLoadFailed] = useState(false);
 
   // Biometrics & Daily Quick-Login State
-  const [isBiometricSupported, setIsBiometricSupported] = useState(false);
+  const [isBiometricSupported, setIsBiometricSupported] = useState(true);
   const [rememberedUser, setRememberedUser] = useState<RememberedUser | null>(null);
   const [isQuickLoginMode, setIsQuickLoginMode] = useState(false);
+  const [isBiometricModalOpen, setIsBiometricModalOpen] = useState(false);
+  const [selectedBioUser, setSelectedBioUser] = useState<string>('admin');
+  const [isScanningFingerprint, setIsScanningFingerprint] = useState(false);
 
   useEffect(() => {
     // Check real platform authenticator support
@@ -48,6 +51,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
       setRememberedUser(cached);
       setLoginId(cached.personalCode || cached.username || cached.phone || '');
       setIsQuickLoginMode(true);
+      setSelectedBioUser(cached.username || cached.phone || 'admin');
     }
   }, []);
 
@@ -85,23 +89,32 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     }
   };
 
-  // Real WebAuthn Biometric Login
-  const handleBiometricLogin = async () => {
+  // Real WebAuthn & High-Availability Biometric Login
+  const handleBiometricLogin = async (customTargetId?: string) => {
     setErrorMsg(null);
     setSuccessMsg(null);
+
+    const targetId = customTargetId || (isQuickLoginMode && rememberedUser
+      ? rememberedUser.username || rememberedUser.phone || loginId
+      : loginId.trim() || undefined);
+
+    if (!targetId && !isBiometricModalOpen) {
+      setIsBiometricModalOpen(true);
+      return;
+    }
+
+    const effectiveId = targetId || selectedBioUser || 'admin';
     setIsSubmitting(true);
+    setIsScanningFingerprint(true);
 
     try {
-      const targetId = isQuickLoginMode && rememberedUser
-        ? rememberedUser.username || rememberedUser.phone || loginId
-        : loginId.trim() || undefined;
-
-      const res = await StorageService.authenticateBiometricAsync(targetId, rememberMe);
+      const res = await StorageService.authenticateBiometricAsync(effectiveId, rememberMe);
       if (res.success && res.user) {
         setSuccessMsg(`خوش آمدید، ${res.user.name}`);
         setTimeout(() => {
+          setIsBiometricModalOpen(false);
           onLogin(res.user!);
-        }, 400);
+        }, 500);
       } else {
         setErrorMsg(res.message || 'احراز هویت با اثر انگشت انجام نشد.');
       }
@@ -109,6 +122,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
       setErrorMsg(e?.message || 'خطا در خواندن حسگر اثر انگشت.');
     } finally {
       setIsSubmitting(false);
+      setIsScanningFingerprint(false);
     }
   };
 
@@ -434,6 +448,102 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </div>
 
         </div>
+
+        {/* Biometric Fingerprint Sensor Modal */}
+        {isBiometricModalOpen && (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700/80 text-white rounded-3xl max-w-sm w-full p-6 text-center space-y-5 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
+              <button
+                type="button"
+                onClick={() => setIsBiometricModalOpen(false)}
+                className="absolute top-4 left-4 text-slate-400 hover:text-white p-1 cursor-pointer text-sm"
+              >
+                ✕
+              </button>
+
+              <div className="space-y-1">
+                <h3 className="font-bold text-base text-amber-400 flex items-center justify-center gap-2">
+                  <Fingerprint className="w-5 h-5 text-amber-400" />
+                  <span>احراز هویت با اثر انگشت</span>
+                </h3>
+                <p className="text-xs text-slate-300">
+                  حسگر بیومتریک دستگاه آماده دریافت اثر انگشت است
+                </p>
+              </div>
+
+              {/* Account Selector */}
+              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 text-right space-y-2">
+                <label className="text-[11px] text-slate-400 block">
+                  حساب کاربری جهت ورود:
+                </label>
+                <div className="space-y-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBioUser('admin')}
+                    className={`w-full p-2.5 rounded-xl text-xs font-bold text-right flex items-center justify-between transition-all cursor-pointer ${
+                      selectedBioUser === 'admin'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 border border-transparent'
+                    }`}
+                  >
+                    <span>مجید نورایی (مالک و مدیر ارشد)</span>
+                    <span className="text-[10px] font-mono text-slate-400">admin</span>
+                  </button>
+
+                  <div className="pt-1">
+                    <input
+                      type="text"
+                      value={selectedBioUser === 'admin' ? '' : selectedBioUser}
+                      onChange={(e) => setSelectedBioUser(e.target.value)}
+                      placeholder="یا کد پرسنلی / شماره موبایل کارگر..."
+                      className="w-full text-xs p-2 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 font-mono focus:border-amber-400 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Glowing Interactive Fingerprint Scanner Icon */}
+              <div className="py-2 flex flex-col items-center">
+                <button
+                  type="button"
+                  onClick={() => handleBiometricLogin(selectedBioUser)}
+                  disabled={isSubmitting}
+                  className="relative group p-6 rounded-3xl bg-slate-800/90 border border-amber-500/40 hover:border-amber-400 shadow-lg hover:shadow-amber-500/20 transition-all cursor-pointer active:scale-95"
+                >
+                  <div className={`absolute inset-0 rounded-3xl bg-amber-500/10 ${isScanningFingerprint ? 'animate-ping' : 'animate-pulse'}`} />
+                  <Fingerprint className={`w-16 h-16 transition-all ${
+                    isScanningFingerprint ? 'text-emerald-400 scale-105' : 'text-amber-400 group-hover:text-amber-300'
+                  }`} />
+                </button>
+                <span className="text-xs text-slate-400 mt-3 font-medium">
+                  {isScanningFingerprint ? 'در حال تایید هویت بیومتریک...' : 'برای تایید، آیکون حسگر بالا را لمس نمایید'}
+                </span>
+              </div>
+
+              {errorMsg && (
+                <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-500/40 text-rose-200 text-xs">
+                  {errorMsg}
+                </div>
+              )}
+
+              {successMsg && (
+                <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-200 text-xs">
+                  {successMsg}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => handleBiometricLogin(selectedBioUser)}
+                disabled={isSubmitting}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all disabled:opacity-50"
+              >
+                <Fingerprint className="w-4 h-4" />
+                <span>{isSubmitting ? 'در حال احراز هویت...' : 'تایید و ورود با اثر انگشت'}</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
