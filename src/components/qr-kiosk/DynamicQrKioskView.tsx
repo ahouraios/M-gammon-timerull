@@ -79,9 +79,13 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
   // Generate dynamic QR token with timestamp & challenge (Fixes GPS-004)
   const generateDynamicToken = async () => {
     try {
+      const token = StorageService.getAuthToken();
       const res = await fetch('/api/qr/token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ workshopId: selectedWorkshop.id })
       });
       const data = await res.json();

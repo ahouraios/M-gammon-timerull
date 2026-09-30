@@ -1,0 +1,230 @@
+{
+  "settings": {
+    "id": "comp_mgommon_01",
+    "companyName": "M.GAMMON",
+    "companyCode": "MG-101",
+    "ownerName": "مجید نورایی (مدیر ارشد)",
+    "logoUrl": "",
+    "address": "مشهد، توس ۱۴۲، حسین زاده ۸",
+    "phoneNumber": "۰۵۱-۳۶۹۰۹۰۹۰",
+    "officeLat": 36.3766,
+    "officeLng": 59.5082,
+    "allowedGpsRadiusMeters": 35,
+    "workshops": [
+      {
+        "id": "ws_1",
+        "name": "کارگاه شماره یک (تولید و ماشین‌کاری)",
+        "code": "WS-01",
+        "lat": 36.37652,
+        "lng": 59.50812,
+        "allowedRadiusMeters": 35,
+        "address": "مشهد، توس ۱۴۲، حسین زاده ۸، پلاک ۱۲"
+      },
+      {
+        "id": "ws_2",
+        "name": "کارگاه شماره دو (مونتاژ و انبار)",
+        "code": "WS-02",
+        "lat": 36.37668,
+        "lng": 59.50835,
+        "allowedRadiusMeters": 35,
+        "address": "مشهد، توس ۱۴۲، حسین زاده ۸، پلاک ۱۸"
+      }
+    ],
+    "smsSenderNumber": "500040001084",
+    "qrRefreshIntervalSeconds": 30,
+    "defaultWorkStartTime": "07:00",
+    "defaultWorkEndTime": "16:00",
+    "lateToleranceMinutes": 15,
+    "annualLeaveDaysQuota": 26,
+    "maxLeaveRequestsPerWeek": 1,
+    "allowMultiplePendingLeaves": false,
+    "maxHourlyLeaveHoursPerMonth": 16,
+    "maxAdvanceRequestsPerMonth": 1,
+    "advanceWindowStartDay": 15,
+    "advanceWindowEndDay": 20,
+    "maxAdvanceSalaryPercent": 30,
+    "workDaysPerMonth": 22,
+    "dailyWorkHours": 8,
+    "overtimeRateMultiplier": 1.4,
+    "insuranceRatePercent": 7,
+    "taxRatePercent": 10,
+    "taxExemptionThreshold": 14000000,
+    "fixedHousingAllowance": 900000,
+    "fixedGroceryAllowance": 1400000,
+    "childAllowance": 0,
+    "jobCategories": [
+      "مدیر داخلی",
+      "مسئول فنی",
+      "نیروی کارگاهی"
+    ]
+  },
+  "shifts": [
+    {
+      "id": "shift_standard_day",
+      "companyId": "comp_mgommon_01",
+      "name": "شیفت استاندارد روزانه کارگاهی",
+      "type": "MORNING",
+      "startTime": "07:00",
+      "endTime": "16:00",
+      "thursdayEndTime": "13:00",
+      "breakDurationMinutes": 60,
+      "workDays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "lateToleranceMinutes": 15,
+      "earlyExitToleranceMinutes": 10
+    },
+    {
+      "id": "shift_evening_workshop",
+      "companyId": "comp_mgommon_01",
+      "name": "شیفت عصر کارگاه",
+      "type": "EVENING",
+      "startTime": "14:00",
+      "endTime": "22:00",
+      "thursdayEndTime": "14:00",
+      "breakDurationMinutes": 45,
+      "workDays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "lateToleranceMinutes": 10,
+      "earlyExitToleranceMinutes": 10
+    }
+  ],
+  "employees": [],
+  "users": [
+    {
+      "id": "usr_admin",
+      "companyId": "comp_mgommon_01",
+      "username": "admin",
+      "passwordHash": "cb092ff074f74d9e0e52916e925166e3bb495df188ecece63b863efccbfe48fc",
+      "name": "مجید نورایی (مالک و مدیر ارشد)",
+      "email": "m.nouraei@mgommon.ir",
+      "phone": "09151111111",
+      "role": "ADMIN",
+      "isSuperAdmin": true,
+      "workshopId": "ws_1",
+      "passwordSalt": "ae252b84bbee211e0f6dc40384e98b97"
+    }
+  ],
+  "attendance": [],
+  "leaves": [],
+  "advances": [],
+  "salaries": [],
+  "bonusesPenalties": [],
+  "auditLogs": [
+    {
+      "id": "log_1790763655349_0iej",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود به سامانه",
+      "resource": "احراز هویت",
+      "details": "ورود موفق از طریق نام کاربری: admin",
+      "timestamp": "2026-09-30T10:20:55.349Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_1790763607088_79eb",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود به سامانه",
+      "resource": "احراز هویت",
+      "details": "ورود موفق از طریق نام کاربری: admin",
+      "timestamp": "2026-09-30T10:20:07.088Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_1790763506955_f17r",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود ناموفق",
+      "resource": "امنیت",
+      "details": "رمز عبور اشتباه از IP: ::ffff:127.0.0.1",
+      "timestamp": "2026-09-30T10:18:26.955Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_1790763493516_u5mf",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود ناموفق",
+      "resource": "امنیت",
+      "details": "رمز عبور اشتباه از IP: ::ffff:127.0.0.1",
+      "timestamp": "2026-09-30T10:18:13.516Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_1790763388121_ah3t",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود ناموفق",
+      "resource": "امنیت",
+      "details": "رمز عبور اشتباه از IP: ::ffff:127.0.0.1",
+      "timestamp": "2026-09-30T10:16:28.122Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_1790763385687_16pi",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود ناموفق",
+      "resource": "امنیت",
+      "details": "رمز عبور اشتباه از IP: ::ffff:127.0.0.1",
+      "timestamp": "2026-09-30T10:16:25.687Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_1790763373122_7tjy",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود ناموفق",
+      "resource": "امنیت",
+      "details": "رمز عبور اشتباه از IP: ::ffff:127.0.0.1",
+      "timestamp": "2026-09-30T10:16:13.122Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log_launch",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "راه‌اندازی سرور مرکزی و پایگاه داده تجاری",
+      "resource": "سرور مرکزی",
+      "details": "پایگاه داده سرور مرکزی با احراز هویت هش‌شده و کنترل همزمانی راه‌اندازی شد.",
+      "timestamp": "2026-09-30T10:12:11.554Z",
+      "ipAddress": "127.0.0.1"
+    }
+  ],
+  "messages": [],
+  "sessions": {
+    "mg_sess_3fe39f68b81d92b5164afc93c6df8ff5ac03f2e7c89dd9db66deca8bf4dc461d": {
+      "userId": "usr_admin",
+      "createdAt": 1790763607088,
+      "expiresAt": 1793355607088,
+      "rememberMe": true
+    },
+    "mg_sess_2cb47fe40918542f3072fb482ba1eef21275aa3c3ce977dc077459b47e2c5a2e": {
+      "userId": "usr_admin",
+      "createdAt": 1790763655348,
+      "expiresAt": 1790850055348,
+      "rememberMe": false
+    }
+  },
+  "usedQrChallenges": {}
+}

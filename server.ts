@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { gregorianToJalali, getDatesBetweenShamsi } from './src/utils/dateUtils';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,13 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Security: Password hashing with PBKDF2 (SHA-256, 10000 iterations) (Fixes SEC-010)
+// Security: Password hashing with PBKDF2 (SHA-256, 100,000 iterations & per-user random salt)
+export function hashPasswordWithSalt(password: string, salt?: string): { hash: string; salt: string } {
+  const actualSalt = salt || crypto.randomBytes(16).toString('hex');
+  const derived = crypto.pbkdf2Sync(password, actualSalt, 100000, 32, 'sha256').toString('hex');
+  return { hash: derived, salt: actualSalt };
+}
+
 export function hashPassword(password: string, salt = 'mgommon_salt_2026'): string {
   return crypto.pbkdf2Sync(password, salt, 10000, 32, 'sha256').toString('hex');
 }
@@ -30,7 +37,19 @@ export function legacyHashPassword(password: string, salt = 'mgommon_salt_2026')
   return crypto.createHmac('sha256', salt).update(password).digest('hex');
 }
 
-// Authoritative Tehran Timezone Helper (Asia/Tehran) (Fixes SEC-015)
+export function verifyPassword(password: string, storedHash: string, storedSalt?: string): boolean {
+  if (storedSalt) {
+    const derived = crypto.pbkdf2Sync(password, storedSalt, 100000, 32, 'sha256').toString('hex');
+    if (derived === storedHash) return true;
+  }
+  const pbkdf2 = crypto.pbkdf2Sync(password, 'mgommon_salt_2026', 10000, 32, 'sha256').toString('hex');
+  if (storedHash === pbkdf2) return true;
+  const legacy = crypto.createHmac('sha256', 'mgommon_salt_2026').update(password).digest('hex');
+  if (storedHash === legacy) return true;
+  return false;
+}
+
+// Authoritative Tehran Timezone & Shamsi Calendar Helper (Asia/Tehran)
 export function getTehranDateTime(d = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Tehran',
@@ -47,9 +66,23 @@ export function getTehranDateTime(d = new Date()) {
   for (const p of parts) {
     map[p.type] = p.value;
   }
-  const dateStr = `${map.year}-${map.month}-${map.day}`;
+
+  const gy = parseInt(map.year, 10);
+  const gm = parseInt(map.month, 10);
+  const gd = parseInt(map.day, 10);
+  const [jy, jm, jd] = gregorianToJalali(gy, gm, gd);
+  const jmStr = jm < 10 ? `0${jm}` : `${jm}`;
+  const jdStr = jd < 10 ? `0${jd}` : `${jd}`;
+  const shamsiDateStr = `${jy}/${jmStr}/${jdStr}`;
+  const gregorianDateStr = `${map.year}-${map.month}-${map.day}`;
   const timeStr = `${map.hour}:${map.minute}`;
-  return { dateStr, timeStr, isoTehran: `${dateStr}T${timeStr}:${map.second}` };
+
+  return {
+    dateStr: shamsiDateStr,
+    gregorianDateStr,
+    timeStr,
+    isoTehran: `${gregorianDateStr}T${timeStr}:${map.second}`
+  };
 }
 
 // Initial Admin Password Hash (Default Admin Password: "Admin@MGommon2026" - No weak/backdoor passwords!)
@@ -224,13 +257,15 @@ let db: DatabaseSchema = (() => {
   return init;
 })();
 
-function persistDb(): void {
+function persistDb(): boolean {
   try {
     const tmpFile = `${DB_FILE}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(db, null, 2), 'utf-8');
     fs.renameSync(tmpFile, DB_FILE);
+    return true;
   } catch (err) {
     console.error('CRITICAL: Database persist failed:', err);
+    return false;
   }
 }
 
@@ -290,13 +325,21 @@ function calculateServerGpsDistanceMeters(lat1: number, lon1: number, lat2: numb
   return Math.round(R * c);
 }
 
-// Auth Middleware
+// Public API routes whitelist (All other /api/* routes require a valid session!)
+const PUBLIC_API_ROUTES = new Set([
+  '/api/health',
+  '/api/time',
+  '/api/auth/login',
+  '/api/auth/webauthn/login-options',
+  '/api/auth/webauthn/login-verify',
+]);
+
+// Auth Middleware: attaches user if token is valid
 function authenticateToken(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token || !db.sessions[token]) {
-    // If not authenticated, proceed without attaching user
     return next();
   }
 
@@ -304,7 +347,7 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
   if (session.expiresAt < Date.now()) {
     delete db.sessions[token];
     persistDb();
-    return res.status(401).json({ error: 'Session expired' });
+    return res.status(401).json({ success: false, message: 'نشست کاربری منقضی شده است. لطفاً مجدداً وارد شوید.' });
   }
 
   const user = db.users.find(u => u.id === session.userId);
@@ -315,6 +358,19 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
 }
 
 app.use(authenticateToken);
+
+// Global Authorization Guard: block all unauthenticated calls to non-public /api/* routes
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/api') && !PUBLIC_API_ROUTES.has(req.path)) {
+    if (!(req as any).user) {
+      return res.status(401).json({
+        success: false,
+        message: 'احراز هویت الزامی است. لطفاً ابتدا وارد سامانه شوید.'
+      });
+    }
+  }
+  next();
+});
 
 // Role & Session Authorization Guards (Fixes SEC-001..SEC-007)
 function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -406,10 +462,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return res.status(401).json({ success: false, message: 'کاربری با این مشخصات یافت نشد.' });
   }
 
-  const pbkdf2Hash = hashPassword(cleanPass);
-  const legacyHash = legacyHashPassword(cleanPass);
   const isDefaultAdmin = targetUser.id === 'usr_admin' && cleanPass === 'Admin@MGommon2026';
-  const isValid = targetUser.passwordHash === pbkdf2Hash || targetUser.passwordHash === legacyHash || isDefaultAdmin;
+  const isValid = isDefaultAdmin || verifyPassword(cleanPass, targetUser.passwordHash, targetUser.passwordSalt);
 
   if (!isValid) {
     failedAttempts[clientIp] = {
@@ -420,9 +474,11 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return res.status(401).json({ success: false, message: 'رمز عبور وارد شده نادرست است.' });
   }
 
-  // Auto-upgrade hash to PBKDF2 if was legacy or default admin
-  if (targetUser.passwordHash !== pbkdf2Hash) {
-    targetUser.passwordHash = pbkdf2Hash;
+  // Auto-upgrade hash to per-user salt PBKDF2 if missing or default
+  if (!targetUser.passwordSalt) {
+    const upgraded = hashPasswordWithSalt(cleanPass);
+    targetUser.passwordHash = upgraded.hash;
+    targetUser.passwordSalt = upgraded.salt;
   }
 
   // Reset failed attempts on success
@@ -631,7 +687,7 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
 });
 
 // 3. Cryptographically Signed Dynamic QR Challenge Token (Anti-Fraud) (Fixes SEC-011)
-app.post('/api/qr/token', (req: Request, res: Response) => {
+app.post('/api/qr/token', requireAuth, (req: Request, res: Response) => {
   const { workshopId } = req.body;
   if (!workshopId) {
     return res.status(400).json({ success: false, message: 'شناسه کارگاه مشخص نشده است.' });
@@ -806,7 +862,9 @@ app.post('/api/attendance/punch', requireAuth, (req: Request, res: Response) => 
     }
 
     logServerAudit(employee.id, `${employee.firstName} ${employee.lastName}`, 'ثبت ورود', 'حضور و غیاب', `ثبت ورود در ساعت ${serverTime} (${assignedWorkshop.name})`, clientIp);
-    persistDb();
+    if (!persistDb()) {
+      return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+    }
 
     return res.json({
       success: true,
@@ -868,7 +926,9 @@ app.post('/api/attendance/punch', requireAuth, (req: Request, res: Response) => 
     record.checkOutMethod = method || 'QR_CODE';
 
     logServerAudit(employee.id, `${employee.firstName} ${employee.lastName}`, 'ثبت خروج', 'حضور و غیاب', `ثبت خروج در ساعت ${serverTime} - کارکرد: ${record.workDurationMinutes} دقیقه`, clientIp);
-    persistDb();
+    if (!persistDb()) {
+      return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+    }
 
     return res.json({
       success: true,
@@ -930,7 +990,9 @@ app.post('/api/attendance/manual-request', requireAuth, (req: Request, res: Resp
   };
 
   db.attendance.push(newRecord);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
 
   res.json({
     success: true,
@@ -952,19 +1014,23 @@ app.post('/api/attendance/review-manual', requireRole('ADMIN', 'MANAGER'), (req:
 
   if (action === 'APPROVE') {
     rec.approvalStatus = 'APPROVED';
+    rec.approvedByUserId = reviewer.id;
     rec.approvedBy = reviewer.name;
     rec.approvedAt = new Date().toISOString();
     rec.notes += ` (تایید شده توسط ${reviewer.name})`;
   } else {
     rec.approvalStatus = 'REJECTED';
     rec.status = 'ABSENT';
+    rec.approvedByUserId = reviewer.id;
     rec.approvedBy = reviewer.name;
     rec.approvedAt = new Date().toISOString();
     rec.notes += ` (رد شده توسط ${reviewer.name}${rejectionReason ? `: ${rejectionReason}` : ''})`;
   }
 
   logServerAudit(reviewer.id, reviewer.name, action === 'APPROVE' ? 'تایید تردد دستی' : 'رد تردد دستی', 'حضور و غیاب', `تردد رکورد ${recordId} توسط ${reviewer.name} ${action === 'APPROVE' ? 'تایید' : 'رد'} شد.`);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
   res.json({ success: true, message: action === 'APPROVE' ? 'تردد با موفقیت تایید شد.' : 'درخواست تردد رد شد.', record: rec });
 });
 
@@ -978,7 +1044,7 @@ app.get('/api/employees', (req: Request, res: Response) => {
   res.json(db.employees);
 });
 
-app.post('/api/employees', (req: Request, res: Response) => {
+app.post('/api/employees', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
   const newEmp = req.body;
   if (!newEmp.firstName || !newEmp.lastName || !newEmp.nationalCode) {
     return res.status(400).json({ success: false, message: 'اطلاعات پرسنلی ناقص است.' });
@@ -1006,65 +1072,108 @@ app.post('/api/employees', (req: Request, res: Response) => {
 
   db.employees.push(employeeRecord);
 
-  // Create associated user account with hashed password
+  // Create associated user account with secure hashed password & random salt
   if (newEmp.username) {
-    const defaultPass = newEmp.password || `M@${newEmp.nationalCode.slice(-4)}`;
+    const defaultPass = newEmp.password || `M@${crypto.randomBytes(4).toString('hex')}`;
+    const { hash, salt } = hashPasswordWithSalt(defaultPass);
     db.users.push({
       id: `usr_${id}`,
       companyId: db.settings.id,
       username: newEmp.username,
-      passwordHash: hashPassword(defaultPass),
+      passwordHash: hash,
+      passwordSalt: salt,
       name: `${newEmp.firstName} ${newEmp.lastName}`,
       email: newEmp.email || `${newEmp.username}@mgommon.ir`,
       phone: newEmp.phone,
       role: 'EMPLOYEE',
       employeeId: id,
       isSuperAdmin: false,
-      workshopId: newEmp.workshopId
+      workshopId: newEmp.workshopId,
+      mustChangePassword: true
     });
   }
 
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی پرسنل در سرور' });
+  }
   res.json({ success: true, employee: employeeRecord });
 });
 
-app.put('/api/employees/:id', (req: Request, res: Response) => {
+app.put('/api/employees/:id', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
   const { id } = req.params;
   const idx = db.employees.findIndex((e: any) => e.id === id);
   if (idx === -1) return res.status(404).json({ success: false, message: 'پرسنل یافت نشد.' });
 
-  // Update employee while preserving all other records (Fixes DATA-001)
-  db.employees[idx] = { ...db.employees[idx], ...req.body, id };
-
-  // Sync associated user name and workshop
-  const uIdx = db.users.findIndex((u: any) => u.employeeId === id);
-  if (uIdx !== -1) {
-    db.users[uIdx].name = `${db.employees[idx].firstName} ${db.employees[idx].lastName}`;
-    db.users[uIdx].phone = db.employees[idx].phone;
-    db.users[uIdx].workshopId = db.employees[idx].workshopId;
+  // Field Allowlist (Fixes SEC-008: prevent malicious overwriting of sensitive metadata)
+  const allowedFields = [
+    'firstName', 'lastName', 'phone', 'email', 'workshopId', 'shiftId',
+    'jobTitle', 'jobCategory', 'address', 'birthDate', 'hireDate',
+    'baseSalary', 'hourlyRate', 'overtimeRate', 'remainingLeaveDays',
+    'bankName', 'bankCardNumber', 'bankAccountNumber', 'bankShebaNumber',
+    'isConfidential', 'isActive', 'personalCode'
+  ];
+  const updates: any = {};
+  for (const field of allowedFields) {
+    if (req.body[field] !== undefined) {
+      updates[field] = req.body[field];
+    }
   }
 
-  persistDb();
+  db.employees[idx] = { ...db.employees[idx], ...updates, id };
+
+  // Sync associated user name, phone, workshop
+  const uIdx = db.users.findIndex((u: any) => u.employeeId === id);
+  if (uIdx !== -1) {
+    if (updates.firstName || updates.lastName) {
+      db.users[uIdx].name = `${db.employees[idx].firstName} ${db.employees[idx].lastName}`;
+    }
+    if (updates.phone) {
+      db.users[uIdx].phone = updates.phone;
+    }
+    if (updates.workshopId) {
+      db.users[uIdx].workshopId = updates.workshopId;
+    }
+    if (updates.email) {
+      db.users[uIdx].email = updates.email;
+    }
+  }
+
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
   res.json({ success: true, employee: db.employees[idx] });
 });
 
-app.delete('/api/employees/:id', (req: Request, res: Response) => {
+app.delete('/api/employees/:id', requireRole('ADMIN'), (req: Request, res: Response) => {
   const { id } = req.params;
   // Raw deletion: never deletes admin or other accounts (Fixes DATA-002)
   db.employees = db.employees.filter((e: any) => e.id !== id);
   db.users = db.users.filter((u: any) => u.employeeId !== id);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
   res.json({ success: true, message: 'پرسنل با موفقیت حذف شد.' });
 });
 
 // 8. Leaves Management with Strict State-Machine & Validation (Fixes HR-001..HR-007)
-app.get('/api/leaves', (_req: Request, res: Response) => {
+app.get('/api/leaves', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json(db.leaves.filter((l: any) => l.employeeId === user.employeeId));
+  }
   res.json(db.leaves);
 });
 
 app.post('/api/leaves', (req: Request, res: Response) => {
+  const user = (req as any).user;
   const leave = req.body;
-  if (!leave.employeeId || !leave.startDate || !leave.endDate) {
+
+  let targetEmployeeId = leave.employeeId;
+  if (user.role === 'EMPLOYEE') {
+    targetEmployeeId = user.employeeId;
+  }
+
+  if (!targetEmployeeId || !leave.startDate || !leave.endDate) {
     return res.status(400).json({ success: false, message: 'اطلاعات درخواست مرخصی ناقص است.' });
   }
 
@@ -1072,7 +1181,7 @@ app.post('/api/leaves', (req: Request, res: Response) => {
     return res.status(400).json({ success: false, message: 'تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.' });
   }
 
-  const emp = db.employees.find(e => e.id === leave.employeeId);
+  const emp = db.employees.find(e => e.id === targetEmployeeId);
   if (!emp) return res.status(404).json({ success: false, message: 'پرسنل یافت نشد.' });
 
   // Check remaining leave days (Fixes HR-003)
@@ -1083,15 +1192,23 @@ app.post('/api/leaves', (req: Request, res: Response) => {
     });
   }
 
-  // Monthly hourly leave limit (Fixes HR-002)
+  // Monthly hourly leave limit and validation (Fixes HR-002)
   if (leave.type === 'HOURLY') {
+    const hours = Number(leave.durationHours);
+    if (!Number.isFinite(hours) || hours <= 0 || hours > (db.settings.dailyWorkHours || 8)) {
+      return res.status(400).json({
+        success: false,
+        message: `مدت مرخصی ساعتی باید عدد مثبت و حداکثر برابر طول شیفت کاری (${db.settings.dailyWorkHours || 8} ساعت) باشد.`
+      });
+    }
+
     const currentMonthPrefix = leave.startDate.substring(0, 7);
     const usedHourlyMins = db.leaves
       .filter((l: any) => l.employeeId === emp.id && l.type === 'HOURLY' && l.status === 'APPROVED' && l.startDate.startsWith(currentMonthPrefix))
       .reduce((s: number, l: any) => s + (l.durationHours || 0) * 60, 0);
 
     const maxHourlyMins = (db.settings.maxHourlyLeaveHoursPerMonth || 16) * 60;
-    const requestedMins = (leave.durationHours || 2) * 60;
+    const requestedMins = hours * 60;
     if (usedHourlyMins + requestedMins > maxHourlyMins) {
       return res.status(400).json({
         success: false,
@@ -1103,18 +1220,22 @@ app.post('/api/leaves', (req: Request, res: Response) => {
   const newLeave = {
     id: `leave_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     ...leave,
+    employeeId: targetEmployeeId,
     status: 'PENDING',
     createdAt: new Date().toISOString()
   };
 
   db.leaves.push(newLeave);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
 
   res.json({ success: true, message: 'درخواست مرخصی با موفقیت ثبت شد و در انتظار تایید است.', leave: newLeave });
 });
 
-app.post('/api/leaves/review', (req: Request, res: Response) => {
-  const { leaveId, status, reviewerName, rejectionReason } = req.body;
+app.post('/api/leaves/review', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { leaveId, status, rejectionReason } = req.body;
   const leave = db.leaves.find((l: any) => l.id === leaveId);
   if (!leave) return res.status(404).json({ success: false, message: 'درخواست مرخصی یافت نشد.' });
 
@@ -1127,7 +1248,8 @@ app.post('/api/leaves/review', (req: Request, res: Response) => {
 
   if (status === 'APPROVED') {
     leave.status = 'APPROVED';
-    leave.reviewedBy = reviewerName || 'مدیریت';
+    leave.reviewedByUserId = user.id;
+    leave.reviewedByName = user.name;
     leave.reviewedAt = new Date().toISOString();
 
     // Deduct leave balance if EARNED
@@ -1135,12 +1257,9 @@ app.post('/api/leaves/review', (req: Request, res: Response) => {
       emp.remainingLeaveDays = Math.max(0, emp.remainingLeaveDays - (leave.durationDays || 1));
     }
 
-    // Materialize attendance for full-day leaves on actual scheduled dates (Fixes HR-004 & HR-005)
+    // Materialize attendance for full-day leaves across ALL days between startDate and endDate (Fixes HR-004 & HR-005)
     if (leave.type !== 'HOURLY') {
-      const datesToMark = [leave.startDate];
-      if (leave.endDate && leave.endDate !== leave.startDate) {
-        datesToMark.push(leave.endDate);
-      }
+      const datesToMark = getDatesBetweenShamsi(leave.startDate, leave.endDate || leave.startDate);
       datesToMark.forEach(dStr => {
         let att = db.attendance.find((a: any) => a.employeeId === leave.employeeId && a.date === dStr);
         if (!att) {
@@ -1168,45 +1287,75 @@ app.post('/api/leaves/review', (req: Request, res: Response) => {
     }
   } else {
     leave.status = 'REJECTED';
-    leave.reviewedBy = reviewerName || 'مدیریت';
+    leave.reviewedByUserId = user.id;
+    leave.reviewedByName = user.name;
     leave.reviewedAt = new Date().toISOString();
     leave.rejectionReason = rejectionReason || 'مخالفت با درخواست';
   }
 
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
   res.json({ success: true, leave });
 });
 
 // Delete leave request and credit back balance if was approved (Fixes HR-007)
-app.delete('/api/leaves/:id', (req: Request, res: Response) => {
+app.delete('/api/leaves/:id', requireAuth, (req: Request, res: Response) => {
+  const user = (req as any).user;
   const { id } = req.params;
   const leave = db.leaves.find((l: any) => l.id === id);
   if (!leave) return res.status(404).json({ success: false, message: 'یافت نشد' });
 
-  if (leave.status === 'APPROVED' && leave.type === 'EARNED') {
-    const emp = db.employees.find(e => e.id === leave.employeeId);
-    if (emp) {
-      emp.remainingLeaveDays += (leave.durationDays || 1);
+  if (user.role === 'EMPLOYEE' && leave.employeeId !== user.employeeId) {
+    return res.status(403).json({ success: false, message: 'شما مجاز به حذف مرخصی دیگران نیستید.' });
+  }
+
+  if (leave.status === 'APPROVED') {
+    if (leave.type === 'EARNED') {
+      const emp = db.employees.find(e => e.id === leave.employeeId);
+      if (emp) {
+        emp.remainingLeaveDays += (leave.durationDays || 1);
+      }
+    }
+    // Clean up ON_LEAVE attendance records for these dates
+    if (leave.type !== 'HOURLY') {
+      const dates = getDatesBetweenShamsi(leave.startDate, leave.endDate || leave.startDate);
+      db.attendance = db.attendance.filter(
+        (a: any) => !(a.employeeId === leave.employeeId && dates.includes(a.date) && a.status === 'ON_LEAVE' && (a.id.startsWith('att_lve_') || a.notes?.includes('مرخصی تایید شده')))
+      );
     }
   }
 
   db.leaves = db.leaves.filter((l: any) => l.id !== id);
-  persistDb();
-  res.json({ success: true, message: 'درخواست مرخصی حذف و سهمیه مربوطه بازیابی شد.' });
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
+  res.json({ success: true, message: 'درخواست مرخصی حذف و سهمیه و رکوردهای مربوطه بازیابی شدند.' });
 });
 
 // 9. Advance Requests with Strict State-Machine (Fixes ADV-001 & ADV-002)
-app.get('/api/advances', (_req: Request, res: Response) => {
+app.get('/api/advances', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json(db.advances.filter((a: any) => a.employeeId === user.employeeId));
+  }
   res.json(db.advances);
 });
 
 app.post('/api/advances', (req: Request, res: Response) => {
+  const user = (req as any).user;
   const adv = req.body;
-  if (!adv.employeeId || !adv.amount || Number(adv.amount) <= 0 || !adv.repayMonth) {
+
+  let targetEmployeeId = adv.employeeId;
+  if (user.role === 'EMPLOYEE') {
+    targetEmployeeId = user.employeeId;
+  }
+
+  if (!targetEmployeeId || !adv.amount || Number(adv.amount) <= 0 || !adv.repayMonth) {
     return res.status(400).json({ success: false, message: 'مبلغ معتبر و ماه بازپرداخت الزامی است.' });
   }
 
-  const emp = db.employees.find(e => e.id === adv.employeeId);
+  const emp = db.employees.find(e => e.id === targetEmployeeId);
   if (!emp) return res.status(404).json({ success: false, message: 'پرسنل یافت نشد.' });
 
   // Cap advance based on settings (default 30% base salary)
@@ -1234,19 +1383,23 @@ app.post('/api/advances', (req: Request, res: Response) => {
   const newAdv = {
     id: `adv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     ...adv,
+    employeeId: targetEmployeeId,
     amount: Math.round(Number(adv.amount)),
     status: 'PENDING',
     createdAt: new Date().toISOString()
   };
 
   db.advances.push(newAdv);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
 
   res.json({ success: true, message: 'درخواست مساعده با موفقیت ارسال شد.', advance: newAdv });
 });
 
-app.post('/api/advances/review', (req: Request, res: Response) => {
-  const { advanceId, status, reviewerName } = req.body;
+app.post('/api/advances/review', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { advanceId, status } = req.body;
   const adv = db.advances.find((a: any) => a.id === advanceId);
   if (!adv) return res.status(404).json({ success: false, message: 'درخواست مساعده یافت نشد.' });
 
@@ -1255,19 +1408,27 @@ app.post('/api/advances/review', (req: Request, res: Response) => {
   }
 
   adv.status = status;
-  adv.reviewedBy = reviewerName || 'مدیریت';
+  adv.reviewedByUserId = user.id;
+  adv.reviewedByName = user.name;
   adv.reviewedAt = new Date().toISOString();
 
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
   res.json({ success: true, advance: adv });
 });
 
 // Bonuses and Penalties endpoint
-app.get('/api/bonuses', (_req: Request, res: Response) => {
+app.get('/api/bonuses', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json((db.bonusesPenalties || []).filter((b: any) => b.employeeId === user.employeeId));
+  }
   res.json(db.bonusesPenalties || []);
 });
 
-app.post('/api/bonuses', (req: Request, res: Response) => {
+app.post('/api/bonuses', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const user = (req as any).user;
   const bp = req.body;
   if (!bp.employeeId || !bp.amount || !bp.type || !bp.title) {
     return res.status(400).json({ success: false, message: 'اطلاعات پاداش یا جریمه ناقص است.' });
@@ -1281,11 +1442,15 @@ app.post('/api/bonuses', (req: Request, res: Response) => {
     id: `bp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     ...bp,
     amount: Math.round(Number(bp.amount)),
+    createdByUserId: user.id,
+    createdByName: user.name,
     createdAt: new Date().toISOString()
   };
 
   db.bonusesPenalties.unshift(newBp);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
 
   res.json({ success: true, bonusPenalty: newBp });
 });
@@ -1299,7 +1464,7 @@ app.get('/api/salaries', (req: Request, res: Response) => {
   res.json(db.salaries);
 });
 
-app.post('/api/salaries/calculate', (req: Request, res: Response) => {
+app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
   const { employeeId, month } = req.body;
   const emp = db.employees.find(e => e.id === employeeId);
   if (!emp) {
@@ -1400,18 +1565,22 @@ app.post('/api/salaries/calculate', (req: Request, res: Response) => {
     db.salaries.push(newSlip);
   }
 
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
   res.json({ success: true, salary: newSlip });
 });
 
-app.post('/api/salaries/mark-paid', (req: Request, res: Response) => {
+app.post('/api/salaries/mark-paid', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
   const { salaryId, paymentDate } = req.body;
   const slip = db.salaries.find((s: any) => s.id === salaryId);
   if (!slip) return res.status(404).json({ success: false, message: 'فیش حقوقی یافت نشد.' });
 
   slip.status = 'PAID';
   slip.paymentDate = paymentDate || new Date().toISOString().split('T')[0];
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
 
   res.json({ success: true, salary: slip });
 });
@@ -1421,19 +1590,16 @@ app.get('/api/settings', (_req: Request, res: Response) => {
   res.json(db.settings);
 });
 
-app.put('/api/settings', (req: Request, res: Response) => {
-  const user = (req as any).user;
-  if (!user || user.role !== 'ADMIN') {
-    return res.status(403).json({ success: false, message: 'تنها مدیر ارشد مجاز به ویرایش تنظیمات است.' });
-  }
-
+app.put('/api/settings', requireRole('ADMIN'), (req: Request, res: Response) => {
   db.settings = { ...db.settings, ...req.body };
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی تنظیمات در سرور' });
+  }
   res.json({ success: true, settings: db.settings });
 });
 
 // Full Backup Export strictly for Super Admin (Fixes BACKUP-002)
-app.get('/api/backup/export', (req: Request, res: Response) => {
+app.get('/api/backup/export', requireRole('ADMIN'), (req: Request, res: Response) => {
   const user = (req as any).user;
   if (!user || !user.isSuperAdmin) {
     return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز: تنها مالک و مدیر ارشد اجازه دانلود نسخه پشتیبان را دارند.' });
@@ -1468,7 +1634,7 @@ app.get('/api/backup/export', (req: Request, res: Response) => {
 });
 
 // Backup Restore with Strict Schema Validation & Atomic Commit (Fixes BACKUP-003)
-app.post('/api/backup/import', (req: Request, res: Response) => {
+app.post('/api/backup/import', requireRole('ADMIN'), (req: Request, res: Response) => {
   const user = (req as any).user;
   if (!user || !user.isSuperAdmin) {
     return res.status(403).json({ success: false, message: 'تنها مالک سامانه اجازه بازیابی اطلاعات را دارد.' });
@@ -1492,7 +1658,9 @@ app.post('/api/backup/import', (req: Request, res: Response) => {
     if (data.messages) db.messages = data.messages;
 
     logServerAudit(user.id, user.name, 'بازیابی پشتیبان', 'پایگاه داده', `بازیابی کامل دیتابیس نسخه ${version || 'نامشخص'}`, req.ip);
-    persistDb();
+    if (!persistDb()) {
+      return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی بازیابی در سرور' });
+    }
 
     res.json({ success: true, message: 'اطلاعات با موفقیت از فایل پشتیبان بازیابی شد.' });
   } catch (err: any) {
@@ -1501,11 +1669,15 @@ app.post('/api/backup/import', (req: Request, res: Response) => {
 });
 
 // 12. Messages & Notifications (Fixes MSG-001 & MSG-002)
-app.get('/api/messages', (_req: Request, res: Response) => {
+app.get('/api/messages', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json(db.messages.filter((m: any) => m.recipientType === 'ALL' || (m.recipientIds && m.recipientIds.includes(user.employeeId))));
+  }
   res.json(db.messages);
 });
 
-app.post('/api/messages', (req: Request, res: Response) => {
+app.post('/api/messages', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
   const { title, content, recipientType, channel, recipientIds } = req.body;
   const user = (req as any).user;
 
@@ -1513,18 +1685,21 @@ app.post('/api/messages', (req: Request, res: Response) => {
     id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     companyId: db.settings.id,
     senderName: user?.name || 'مدیریت کارگاه',
+    senderUserId: user?.id,
     recipientType: recipientType || 'ALL',
     recipientIds: recipientIds || [],
     title: title.trim(),
     content: content.trim(),
     channel: channel || 'IN_APP',
     sentAt: new Date().toISOString(),
-    status: channel === 'SMS' ? 'QUEUED' : 'SENT', // Real status without fake DELIVERED claim
+    status: channel === 'SMS' ? 'QUEUED' : 'SENT',
     partsCount: Math.ceil(content.length / 70) || 1
   };
 
   db.messages.unshift(newMsg);
-  persistDb();
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی پیام در سرور' });
+  }
 
   res.json({
     success: true,

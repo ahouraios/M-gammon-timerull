@@ -101,6 +101,10 @@ export class StorageService {
     this.saveAdvanceRequests(advances);
   }
 
+  static getAuthToken(): string | null {
+    return localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+  }
+
   // ==========================================================
   // AUTHENTICATION & USER MANAGEMENT
   // ==========================================================
