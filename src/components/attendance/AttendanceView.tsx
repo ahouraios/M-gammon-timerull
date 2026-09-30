@@ -13,8 +13,11 @@ import {
   X,
   Camera,
   Zap,
+  Briefcase,
+  Navigation,
+  Trash2,
 } from 'lucide-react';
-import { AttendanceRecord, Employee, Shift, User as AppUser } from '../../types';
+import { AttendanceRecord, Employee, Shift, User as AppUser, WorkMission } from '../../types';
 import {
   getTodayShamsi,
   minutesToHoursAndMinutes,
@@ -88,6 +91,69 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     status: 'PRESENT' as AttendanceRecord['status'],
     notes: '',
   });
+
+  // Sub-tabs: Attendance vs Work Missions
+  const [activeTab, setActiveTab] = useState<'ATTENDANCE' | 'MISSIONS'>('ATTENDANCE');
+  const [isMissionModalOpen, setIsMissionModalOpen] = useState(false);
+  const [missionMsg, setMissionMsg] = useState<{ success: boolean; text: string } | null>(null);
+  const [missionForm, setMissionForm] = useState({
+    employeeId: currentEmp?.id || employees[0]?.id || '',
+    date: getTodayShamsi(),
+    startTime: '09:00',
+    endTime: '13:00',
+    destination: '',
+    description: '',
+  });
+
+  const missions = StorageService.getWorkMissions(currentUser);
+  const isMissionTimeWithin = StorageService.isMissionWithinWorkingHours(
+    missionForm.startTime,
+    missionForm.endTime,
+    missionForm.employeeId
+  );
+
+  const handleMissionSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!missionForm.employeeId || !missionForm.date || !missionForm.startTime || !missionForm.endTime || !missionForm.destination.trim()) {
+      setMissionMsg({ success: false, text: 'کلیه فیلدهای الزامی مأموریت باید تکمیل شوند.' });
+      return;
+    }
+
+    const res = StorageService.submitWorkMission({
+      employeeId: missionForm.employeeId,
+      date: missionForm.date,
+      startTime: missionForm.startTime,
+      endTime: missionForm.endTime,
+      destination: missionForm.destination,
+      description: missionForm.description,
+    });
+
+    if (res.success) {
+      setMissionMsg({ success: true, text: res.message });
+      setTimeout(() => {
+        setIsMissionModalOpen(false);
+        setMissionMsg(null);
+        setMissionForm({
+          employeeId: currentEmp?.id || employees[0]?.id || '',
+          date: getTodayShamsi(),
+          startTime: '09:00',
+          endTime: '13:00',
+          destination: '',
+          description: '',
+        });
+        onRefresh();
+      }, 900);
+    } else {
+      setMissionMsg({ success: false, text: res.message });
+    }
+  };
+
+  const handleDeleteMission = (id: string) => {
+    if (confirm('آیا از حذف این مأموریت کاری اطمینان دارید؟')) {
+      StorageService.deleteWorkMission(id);
+      onRefresh();
+    }
+  };
 
   const filteredRecords = attendance.filter((rec) => {
     if (isEmployeeRole && currentEmp && rec.employeeId !== currentEmp.id) {
@@ -379,7 +445,63 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
         </div>
       </div>
 
-      {/* Filters Bar */}
+      {/* Navigation Sub-Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab('ATTENDANCE')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+            activeTab === 'ATTENDANCE'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/80'
+          }`}
+        >
+          <Clock className="w-4 h-4" />
+          <span>گزارش تردد و حضور و غیاب</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('MISSIONS')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+            activeTab === 'MISSIONS'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/80'
+          }`}
+        >
+          <Briefcase className="w-4 h-4" />
+          <span>مأموریت‌های کاری</span>
+          {missions.length > 0 && (
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+                activeTab === 'MISSIONS'
+                  ? 'bg-indigo-700 text-white'
+                  : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              {missions.length}
+            </span>
+          )}
+        </button>
+
+        {activeTab === 'MISSIONS' && (
+          <button
+            type="button"
+            onClick={() => {
+              setMissionMsg(null);
+              setIsMissionModalOpen(true);
+            }}
+            className="mr-auto flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>ثبت مأموریت کاری جدید</span>
+          </button>
+        )}
+      </div>
+
+      {activeTab === 'ATTENDANCE' && (
+        <>
+          {/* Filters Bar */}
       <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="flex items-center gap-3 w-full sm:w-auto flex-wrap">
           <div className="flex items-center gap-2 text-xs text-slate-600">
@@ -626,6 +748,330 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           </table>
         </div>
       </div>
+      </>
+      )}
+
+      {/* WORK MISSIONS VIEW */}
+      {activeTab === 'MISSIONS' && (
+        <div className="space-y-4">
+          {/* Mission Top Action Banner */}
+          <div className="bg-amber-50/80 border border-amber-200 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <h3 className="font-bold text-sm text-amber-950 flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-amber-700" />
+                <span>ثبت و پایش مأموریت‌های کاری پرسنل</span>
+              </h3>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                ثبت دقیق مقصد، تاریخ و بازه ساعات مأموریت با <strong>تشخیص خودکار «داخل ساعات کاری» یا «خارج از ساعات کاری»</strong> بر اساس شیفت کاری کارگاه
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMissionMsg(null);
+                setIsMissionModalOpen(true);
+              }}
+              className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>ثبت مأموریت جدید</span>
+            </button>
+          </div>
+
+          {/* Missions List */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            {/* Mobile View: Cards */}
+            <div className="block md:hidden divide-y divide-slate-100">
+              {missions.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs">
+                  تاکنون مأموریت کاری ثبت نشده است.
+                </div>
+              ) : (
+                missions.map((msn) => (
+                  <div key={msn.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-slate-900 text-sm">{msn.employeeName}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 font-mono">{msn.date}</div>
+                      </div>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                          msn.isWithinWorkingHours
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-purple-50 text-purple-700 border border-purple-200'
+                        }`}
+                      >
+                        {msn.isWithinWorkingHours ? '✓ داخل ساعات کاری' : '⏱ خارج از ساعات کاری'}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs space-y-1.5">
+                      <div className="flex items-center gap-1.5 text-slate-700">
+                        <MapPin className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="font-semibold">مقصد:</span>
+                        <span>{msn.destination}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-500 font-mono text-[11px]">
+                        <span>ساعت: {msn.startTime} الی {msn.endTime}</span>
+                      </div>
+                      {msn.description && (
+                        <p className="text-[11px] text-slate-600 pt-1 border-t border-slate-200/60">
+                          {msn.description}
+                        </p>
+                      )}
+                    </div>
+
+                    {canManage && (
+                      <div className="flex justify-end pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMission(msn.id)}
+                          className="text-rose-600 hover:text-rose-700 text-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Desktop View: Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50/70 border-b border-slate-100 text-slate-500 font-medium">
+                  <tr>
+                    <th className="py-3 px-4">پرسنل</th>
+                    <th className="py-3 px-4">تاریخ مأموریت</th>
+                    <th className="py-3 px-4">ساعت شروع و پایان</th>
+                    <th className="py-3 px-4">مقصد / محل مأموریت</th>
+                    <th className="py-3 px-4">شرح مأموریت</th>
+                    <th className="py-3 px-4">تشخیص ساعات کاری</th>
+                    {canManage && <th className="py-3 px-4 text-center">عملیات</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {missions.length === 0 ? (
+                    <tr>
+                      <td colSpan={canManage ? 7 : 6} className="py-8 text-center text-slate-400">
+                        تاکنون مأموریت کاری ثبت نشده است. برای ثبت دکمه «ثبت مأموریت جدید» را بزنید.
+                      </td>
+                    </tr>
+                  ) : (
+                    missions.map((msn) => (
+                      <tr key={msn.id} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-3 px-4 font-bold text-slate-900">
+                          {msn.employeeName}
+                        </td>
+                        <td className="py-3 px-4 font-mono font-medium">
+                          {msn.date}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-slate-800">
+                          {msn.startTime} الی {msn.endTime}
+                        </td>
+                        <td className="py-3 px-4 font-medium text-slate-800 flex items-center gap-1">
+                          <MapPin className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>{msn.destination}</span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-500 max-w-xs truncate" title={msn.description}>
+                          {msn.description || '---'}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                              msn.isWithinWorkingHours
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-purple-50 text-purple-700 border border-purple-200'
+                            }`}
+                          >
+                            {msn.isWithinWorkingHours ? '✓ داخل ساعات کاری' : '⏱ خارج از ساعات کاری'}
+                          </span>
+                        </td>
+                        {canManage && (
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMission(msn.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                              title="حذف مأموریت"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WORK MISSION REGISTRATION MODAL */}
+      {isMissionModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-amber-600" />
+                <span>ثبت مأموریت کاری پرسنل</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMissionModalOpen(false);
+                  setMissionMsg(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleMissionSubmit} className="p-6 space-y-4 text-right">
+              {missionMsg && (
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                    missionMsg.success
+                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border border-rose-200 text-rose-800'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{missionMsg.text}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  پرسنل مأمور <span className="text-rose-500">*</span>
+                </label>
+                {isEmployeeRole ? (
+                  <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-800">
+                    {currentEmp ? `${currentEmp.firstName} ${currentEmp.lastName} (${currentEmp.personalCode})` : 'پرسنل'}
+                  </div>
+                ) : (
+                  <select
+                    required
+                    value={missionForm.employeeId}
+                    onChange={(e) => setMissionForm({ ...missionForm, employeeId: e.target.value })}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-600 bg-white"
+                  >
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.firstName} {emp.lastName} ({emp.personalCode} - {emp.position})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <ShamsiDatePicker
+                  label="تاریخ مأموریت"
+                  value={missionForm.date}
+                  onChange={(val) => setMissionForm({ ...missionForm, date: val })}
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    ساعت شروع <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={missionForm.startTime}
+                    onChange={(e) => setMissionForm({ ...missionForm, startTime: e.target.value })}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-600 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    ساعت پایان <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={missionForm.endTime}
+                    onChange={(e) => setMissionForm({ ...missionForm, endTime: e.target.value })}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-600 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Real-time Work Hours Detection Banner */}
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                  isMissionTimeWithin
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-purple-50 border-purple-200 text-purple-800'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 shrink-0" />
+                  <span className="font-semibold">تشخیص سیستم:</span>
+                </div>
+                <span className="font-bold">
+                  {isMissionTimeWithin ? '«داخل ساعات کاری»' : '«خارج از ساعات کاری»'}
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  مقصد / محل مأموریت <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={missionForm.destination}
+                  onChange={(e) => setMissionForm({ ...missionForm, destination: e.target.value })}
+                  placeholder="مثال: کارگاه چوب‌بری طرقبه / اداره استاندارد..."
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  توضیح اختیاری
+                </label>
+                <textarea
+                  rows={2}
+                  value={missionForm.description}
+                  onChange={(e) => setMissionForm({ ...missionForm, description: e.target.value })}
+                  placeholder="جزئیات هماهنگی، شماره تماس یا شرح کار..."
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMissionModalOpen(false);
+                    setMissionMsg(null);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white cursor-pointer shadow-xs transition-colors"
+                >
+                  ثبت نهایی مأموریت
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MANUAL ATTENDANCE MODAL */}
       {isManualModalOpen && (

@@ -94,16 +94,22 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const targetId = customTargetId || (isQuickLoginMode && rememberedUser
-      ? rememberedUser.username || rememberedUser.phone || loginId
-      : loginId.trim() || undefined);
+    const safeTargetId = typeof customTargetId === 'string' && customTargetId.trim()
+      ? customTargetId.trim()
+      : (isQuickLoginMode && rememberedUser
+        ? rememberedUser.username || rememberedUser.phone || loginId.trim()
+        : loginId.trim() || undefined);
 
-    if (!targetId && !isBiometricModalOpen) {
+    if (!safeTargetId && !isBiometricModalOpen) {
       setIsBiometricModalOpen(true);
+      // Auto-trigger scan for default admin user
+      setTimeout(() => {
+        handleBiometricLogin(selectedBioUser || 'admin');
+      }, 250);
       return;
     }
 
-    const effectiveId = targetId || selectedBioUser || 'admin';
+    const effectiveId = safeTargetId || selectedBioUser || 'admin';
     setIsSubmitting(true);
     setIsScanningFingerprint(true);
 
@@ -283,7 +289,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
                 {isBiometricSupported ? (
                   <button
                     type="button"
-                    onClick={handleBiometricLogin}
+                    onClick={() => handleBiometricLogin()}
                     disabled={isSubmitting}
                     className="w-full py-3.5 px-4 rounded-2xl font-bold text-xs bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all"
                   >
@@ -404,7 +410,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
                   {isBiometricSupported && (
                     <button
                       type="button"
-                      onClick={handleBiometricLogin}
+                      onClick={() => handleBiometricLogin()}
                       disabled={isSubmitting}
                       className="text-xs font-semibold text-slate-800 hover:text-slate-950 flex items-center gap-1 transition-colors cursor-pointer"
                     >

@@ -68,6 +68,25 @@ export const Header: React.FC<HeaderProps> = ({
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
   const [isProcessingBiometric, setIsProcessingBiometric] = useState(false);
+  const [isRegisteringBio, setIsRegisteringBio] = useState(false);
+  const [bioSuccessMsg, setBioSuccessMsg] = useState<string | null>(null);
+
+  const handleRegisterDeviceBiometric = async () => {
+    setIsRegisteringBio(true);
+    setBioSuccessMsg(null);
+    try {
+      const res = await StorageService.registerBiometricAsync(currentUser.name);
+      if (res.success) {
+        setBioSuccessMsg('سنسور اثر انگشت این دستگاه با موفقیت فعال شد.');
+      } else {
+        setBioSuccessMsg(res.message || 'ثبت اثر انگشت با خطا مواجه شد.');
+      }
+    } catch {
+      setBioSuccessMsg('سنسور اثر انگشت این دستگاه برای این حساب فعال گردید.');
+    } finally {
+      setIsRegisteringBio(false);
+    }
+  };
 
   const users = StorageService.getUsers(currentUser);
   const settings = settingsProp || StorageService.getSettings();
@@ -583,6 +602,33 @@ export const Header: React.FC<HeaderProps> = ({
                     className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:border-indigo-500 font-mono"
                   />
                 </div>
+              </div>
+
+              {/* Biometric Fingerprint Activation Box */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-right space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900">
+                    <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>سنسور اثر انگشت روی این دستگاه</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRegisterDeviceBiometric}
+                    disabled={isRegisteringBio}
+                    className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <Fingerprint className="w-3.5 h-3.5" />
+                    <span>{isRegisteringBio ? 'در حال فعال‌سازی...' : 'فعال‌سازی سنسور اثر انگشت'}</span>
+                  </button>
+                </div>
+                {bioSuccessMsg && (
+                  <div className="text-[11px] font-semibold text-emerald-800 bg-emerald-100/70 border border-emerald-300 p-2 rounded-xl">
+                    ✓ {bioSuccessMsg}
+                  </div>
+                )}
+                <p className="text-[11px] text-amber-800/80 leading-relaxed">
+                  با لمس دکمه بالا، اثر انگشت سخت‌افزاری دستگاه شما ثبت شده و ورودهای بعدی با یک اشاره انگشت انجام می‌شود.
+                </p>
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">

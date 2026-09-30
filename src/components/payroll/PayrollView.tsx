@@ -232,7 +232,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
           ) : (
             filteredSalaries.map((sal) => {
               const emp = employees.find((e) => e.id === sal.employeeId);
-              const deductions = (sal.insuranceDeduction || 0) + (sal.taxDeduction || 0) + (sal.advancesTotal || 0) + (sal.penaltiesTotal || 0);
+              const deductions = (sal.insuranceDeduction || 0) + (sal.taxDeduction || 0) + (sal.advancesTotal || 0) + (sal.penaltiesTotal || 0) + (sal.miscDeductionsTotal || 0);
               return (
                 <div key={sal.id} className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
@@ -501,10 +501,18 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                         </span>
                       </div>
                     )}
+                    {viewingPayslip.personalCardExpensesTotal && viewingPayslip.personalCardExpensesTotal > 0 ? (
+                      <div className="flex justify-between py-1 border-b border-slate-100 text-indigo-700 font-bold bg-indigo-50/60 px-1.5 py-1 rounded-lg">
+                        <span>هزینه پرداخت‌شده از کارت شخصی کارگر:</span>
+                        <span className="font-mono">
+                          +{formatCurrencyTomans(viewingPayslip.personalCardExpensesTotal)}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="flex justify-between pt-2 font-bold text-slate-900">
                       <span>جمع ناخالص پرداختی:</span>
                       <span className="font-mono">
-                        {formatCurrencyTomans(viewingPayslip.grossSalary)}
+                        {formatCurrencyTomans(viewingPayslip.grossSalary + (viewingPayslip.personalCardExpensesTotal || 0))}
                       </span>
                     </div>
                   </div>
@@ -541,6 +549,14 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                         </span>
                       </div>
                     )}
+                    {viewingPayslip.miscDeductionsTotal && viewingPayslip.miscDeductionsTotal > 0 ? (
+                      <div className="flex justify-between py-1 border-b border-slate-100 text-rose-700 font-bold bg-rose-50/60 px-1.5 py-1 rounded-lg">
+                        <span>کسر پرداخت متفرقه / علی‌الحساب:</span>
+                        <span className="font-mono">
+                          -{formatCurrencyTomans(viewingPayslip.miscDeductionsTotal)}
+                        </span>
+                      </div>
+                    ) : null}
                     {viewingPayslip.penaltiesTotal > 0 && (
                       <div className="flex justify-between py-1 border-b border-slate-100 text-rose-700">
                         <span>کسورات انضباطی / تاخیر:</span>
@@ -549,7 +565,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                         </span>
                       </div>
                     )}
-                    {viewingPayslip.insuranceDeduction === 0 && viewingPayslip.taxDeduction === 0 && viewingPayslip.advancesTotal === 0 && viewingPayslip.penaltiesTotal === 0 && (
+                    {viewingPayslip.insuranceDeduction === 0 && viewingPayslip.taxDeduction === 0 && viewingPayslip.advancesTotal === 0 && viewingPayslip.penaltiesTotal === 0 && (!viewingPayslip.miscDeductionsTotal || viewingPayslip.miscDeductionsTotal === 0) && (
                       <div className="py-2 text-slate-400 text-xs text-center">
                         بدون کسورات در این ماه
                       </div>
@@ -561,7 +577,8 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                           viewingPayslip.insuranceDeduction +
                             viewingPayslip.taxDeduction +
                             viewingPayslip.advancesTotal +
-                            viewingPayslip.penaltiesTotal
+                            viewingPayslip.penaltiesTotal +
+                            (viewingPayslip.miscDeductionsTotal || 0)
                         )}
                       </span>
                     </div>

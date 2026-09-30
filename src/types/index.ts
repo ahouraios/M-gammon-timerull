@@ -57,8 +57,10 @@ export interface BroadcastMessage {
   content: string;
   channel: 'SMS' | 'IN_APP' | 'BOTH';
   sentAt: string;
-  status: 'DELIVERED' | 'SENT';
+  status: 'DELIVERED' | 'SENT' | 'FAILED';
+  smsDeliveryStatus?: string;
   partsCount?: number;
+  expenseId?: string; // ID هزینه ثبت شده جهت تصمیم‌گیری مستقیم مدیر
 }
 
 export type EmployeeStatus = 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
@@ -175,6 +177,59 @@ export interface AdvanceRequest {
   rejectionReason?: string;
 }
 
+export type ExpenseStatus = 'PENDING_SETTLEMENT' | 'SETTLED' | 'ADDED_TO_SALARY' | 'REJECTED';
+
+export interface WorkerExpense {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  employeeName: string;
+  amount: number; // in Tomans
+  title: string; // شرح یا عنوان خرید
+  date: string; // Shamsi date e.g. 1405/07/02
+  receiptUrl?: string; // تصویر اختیاری فاکتور یا رسید
+  payer: 'کارت شخصی کارگر';
+  status: ExpenseStatus; // 'PENDING_SETTLEMENT' | 'SETTLED' | 'ADDED_TO_SALARY' | 'REJECTED'
+  createdAt: string;
+  settledAt?: string;
+  settledBy?: string;
+  settlementNotes?: string;
+  settlementType?: 'IMMEDIATE' | 'SALARY' | 'REJECTED';
+  rejectionReason?: string;
+}
+
+// پرداخت‌های متفرقه مدیر به کارگر (علی‌الحساب، پرداخت متفرقه و سایر پرداخت‌ها)
+export interface MiscPayment {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  employeeName: string;
+  amount: number; // in Tomans
+  title: string; // شرح یا نوع پرداخت (مثال: پرداخت متفرقه، علی‌الحساب، سایر)
+  date: string; // تاریخ شمسی
+  month: string; // دوره حقوقی مرتبط، مثال: 1405/07
+  deductFromSalary: boolean; // آیا از حقوق کسر شود؟ (بله / خیر)
+  notes?: string;
+  createdAt: string;
+  createdBy?: string;
+}
+
+// مأموریت کاری (ثبت دقیق مأموریت و تشخیص خودکار داخل/خارج از ساعات کاری)
+export interface WorkMission {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  employeeName: string;
+  date: string; // تاریخ شمسی مأموریت
+  startTime: string; // ساعت شروع، مثال: 10:00
+  endTime: string; // ساعت پایان، مثال: 14:00
+  destination: string; // مقصد / محل مأموریت
+  description?: string; // توضیح اختیاری
+  isWithinWorkingHours: boolean; // داخل ساعات کاری یا خارج از ساعات کاری
+  createdAt: string;
+  createdBy?: string;
+}
+
 export interface BonusOrPenalty {
   id: string;
   companyId: string;
@@ -200,6 +255,8 @@ export interface SalaryRecord {
   bonusesTotal: number;
   penaltiesTotal: number;
   advancesTotal: number;
+  personalCardExpensesTotal?: number; // هزینه پرداخت‌شده از کارت شخصی کارگر (اضافه‌شده به حقوق)
+  miscDeductionsTotal?: number; // کسورات پرداخت‌های متفرقه که گزینه کسر از حقوق فعال بوده
   insuranceDeduction: number;
   taxDeduction: number;
   housingAllowance: number;
@@ -223,6 +280,8 @@ export interface AuditLog {
   ipAddress?: string;
 }
 
+export type SmsProvider = 'KAVENEGAR' | 'IPPANEL_FARAZ' | 'MELIPAYAMAK' | 'GHASEDAK' | 'SMS_IR' | 'CUSTOM';
+
 export interface CompanySettings {
   id: string;
   companyName: string;
@@ -235,8 +294,15 @@ export interface CompanySettings {
   officeLng: number;
   allowedGpsRadiusMeters: number; // default 20 meters
   workshops: Workshop[];
+  // سامانه و پنل ارسال پیامک واقعی
+  smsEnabled?: boolean;
+  smsProvider?: SmsProvider;
   smsApiKey?: string;
   smsSenderNumber?: string;
+  smsUsername?: string;
+  smsPassword?: string;
+  smsPatternCode?: string;
+  smsCustomEndpoint?: string;
   qrRefreshIntervalSeconds: number;
   // 1. تنظیمات شیفت
   defaultWorkStartTime: string;

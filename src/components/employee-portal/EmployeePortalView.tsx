@@ -14,7 +14,15 @@ import {
   Zap,
   Lock,
   ShieldAlert,
-  Fingerprint
+  Fingerprint,
+  Receipt,
+  Upload,
+  Image as ImageIcon,
+  FileText,
+  X,
+  Eye,
+  Briefcase,
+  MapPin
 } from 'lucide-react';
 import {
   Employee,
@@ -23,6 +31,8 @@ import {
   AdvanceRequest,
   SalaryRecord,
   User,
+  WorkerExpense,
+  ExpenseStatus
 } from '../../types';
 import { CopyButton } from '../common/CopyButton';
 import { StorageService } from '../../services/storage';
@@ -99,6 +109,75 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   const [avatarPreview, setAvatarPreview] = useState<string | null>(
     currentEmployee?.avatarUrl || null
   );
+
+  // Worker Personal Card Expenses State (ثبت خرید با کارت شخصی)
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [expenseAmount, setExpenseAmount] = useState<number | ''>('');
+  const [expenseTitle, setExpenseTitle] = useState('');
+  const [expenseDate, setExpenseDate] = useState(getTodayShamsi());
+  const [expenseReceipt, setExpenseReceipt] = useState<string | null>(null);
+  const [expenseMsg, setExpenseMsg] = useState<{ success: boolean; text: string } | null>(null);
+  const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
+  const [isExpenseHistoryModalOpen, setIsExpenseHistoryModalOpen] = useState(false);
+
+  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 3 * 1024 * 1024) {
+        alert('حجم تصویر فاکتور نباید بیش از ۳ مگابایت باشد.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setExpenseReceipt(event.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleExpenseSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentEmployee) return;
+    if (!expenseAmount || Number(expenseAmount) <= 0) {
+      setExpenseMsg({ success: false, text: 'لطفاً مبلغ خرید را وارد نمایید.' });
+      return;
+    }
+    if (!expenseTitle.trim()) {
+      setExpenseMsg({ success: false, text: 'لطفاً عنوان یا شرح خرید را وارد نمایید.' });
+      return;
+    }
+
+    setIsSubmittingExpense(true);
+    setExpenseMsg(null);
+    try {
+      const res = StorageService.submitWorkerExpense({
+        employeeId: currentEmployee.id,
+        amount: Number(expenseAmount),
+        title: expenseTitle.trim(),
+        date: expenseDate,
+        receiptUrl: expenseReceipt || undefined
+      });
+
+      if (res.success) {
+        setExpenseMsg({ success: true, text: res.message });
+        setTimeout(() => {
+          setIsExpenseModalOpen(false);
+          setExpenseAmount('');
+          setExpenseTitle('');
+          setExpenseReceipt(null);
+          setExpenseMsg(null);
+          onRefresh();
+        }, 1200);
+      } else {
+        setExpenseMsg({ success: false, text: res.message });
+      }
+    } catch {
+      setExpenseMsg({ success: false, text: 'خطا در ثبت هزینه.' });
+    } finally {
+      setIsSubmittingExpense(false);
+    }
+  };
 
   // Check granular permissions for this employee
   const canClock = StorageService.hasPermission(currentEmployee, 1);
@@ -185,11 +264,17 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
     onRefresh();
   };
 
-  // My requests, salary records and relevant messages
+  // My requests, salary records, expenses and relevant messages
   const myLeaves = leaves.filter((l) => l.employeeId === currentEmployee?.id);
   const myAdvances = advances.filter((a) => a.employeeId === currentEmployee?.id);
   const mySalaries = salaries.filter((s) => s.employeeId === currentEmployee?.id);
   const myAttendanceHistory = attendance.filter((a) => a.employeeId === currentEmployee?.id);
+  const myExpenses = StorageService.getWorkerExpenses(currentUser).filter(
+    (e) => e.employeeId === currentEmployee?.id
+  );
+  const totalPendingExpense = myExpenses
+    .filter((e) => e.status === 'PENDING_SETTLEMENT')
+    .reduce((sum, e) => sum + e.amount, 0);
 
   // Workshop messages
   const allMessages = StorageService.getMessages();
@@ -498,8 +583,8 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
         </div>
       )}
 
-      {/* 3 Quick Action Shortcuts (Leaves, Advances, Payslips) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* 4 Quick Action Shortcuts (Leaves, Advances, Worker Expenses, Payslips) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Leaves */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
           <div>
@@ -539,7 +624,7 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           </button>
         </div>
 
-        {/* Card 2: Advances */}
+        {/* Card 2: Advances (مساعده - بدهکاری کارگر) */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -578,7 +663,80 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           </button>
         </div>
 
-        {/* Card 3: Payslips */}
+        {/* Card 3: Worker Personal Card Expenses (خریدهای کارگر با کارت شخصی - بستانکاری از کارگاه) */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="font-bold text-slate-800 text-sm">خریدهای من (کارت شخصی)</span>
+              <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center">
+                <Receipt className="w-4 h-4" />
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              بستانکاری در انتظار تسویه:{' '}
+              <strong className="text-amber-700 font-mono">
+                {formatCurrencyTomans(totalPendingExpense)}
+              </strong>
+            </p>
+            <div className="space-y-1.5 text-xs text-slate-600">
+              {myExpenses.length === 0 ? (
+                <div className="py-2 text-center text-slate-400 text-[11px]">
+                  خریدی با کارت شخصی ثبت نشده است.
+                </div>
+              ) : (
+                myExpenses.slice(0, 3).map((exp) => (
+                  <div key={exp.id} className="flex items-center justify-between py-1.5 border-b border-slate-100">
+                    <span className="truncate max-w-[110px]" title={exp.title}>{exp.title}</span>
+                    <div className="flex items-center gap-1.5 font-mono">
+                      <span>{formatCurrencyTomans(exp.amount)}</span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                          exp.status === 'SETTLED'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : exp.status === 'ADDED_TO_SALARY'
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : exp.status === 'REJECTED'
+                            ? 'bg-rose-50 text-rose-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {exp.status === 'SETTLED'
+                          ? 'تسویه‌شده'
+                          : exp.status === 'ADDED_TO_SALARY'
+                          ? 'افزوده به حقوق'
+                          : exp.status === 'REJECTED'
+                          ? 'ردشده'
+                          : 'در انتظار'}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="space-y-2 mt-4">
+            <button
+              type="button"
+              onClick={() => setIsExpenseModalOpen(true)}
+              className="w-full py-2 rounded-xl text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Receipt className="w-3.5 h-3.5 text-amber-700" />
+              <span>ثبت خرید با کارت شخصی</span>
+            </button>
+            {myExpenses.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setIsExpenseHistoryModalOpen(true)}
+                className="w-full py-1.5 rounded-xl text-[11px] font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer flex items-center justify-center gap-1"
+              >
+                <Eye className="w-3 h-3 text-slate-400" />
+                <span>مشاهده سوابق و وضعیت تسویه ({myExpenses.length})</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Card 4: Payslips */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -791,6 +949,344 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Worker Personal Card Expense Registration Modal */}
+      {isExpenseModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                <Receipt className="w-4 h-4 text-amber-600" />
+                <span>ثبت خرید با کارت شخصی برای کارگاه</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExpenseModalOpen(false);
+                  setExpenseMsg(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {expenseMsg && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                  expenseMsg.success
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border border-rose-200 text-rose-800'
+                }`}
+              >
+                <CheckCircle className="w-4 h-4 shrink-0" />
+                <span>{expenseMsg.text}</span>
+              </div>
+            )}
+
+            {/* Payer Clarification Banner */}
+            <div className="bg-amber-50/80 border border-amber-200 p-3 rounded-2xl space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-amber-800 font-medium">پرداخت‌کننده در این فرم:</span>
+                <span className="font-bold text-amber-950 bg-amber-200/90 px-2 py-0.5 rounded-lg border border-amber-300">
+                  «کارت شخصی کارگر»
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-700 leading-relaxed pt-0.5">
+                این هزینه به منزله <strong>بستانکاری کارگر بابت هزینه مجموعه</strong> است و پس از ثبت، با وضعیت <strong>«در انتظار تسویه»</strong> ذخیره شده و پیام فوری برای مدیر ارسال می‌گردد.
+              </p>
+            </div>
+
+            <form onSubmit={handleExpenseSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  مبلغ خرید (تومان) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1000"
+                  step="1000"
+                  value={expenseAmount}
+                  onChange={(e) => setExpenseAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="مثال: ۱۸۵۰۰۰۰"
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 font-mono text-left focus:border-amber-600 outline-none"
+                />
+                {expenseAmount && Number(expenseAmount) > 0 ? (
+                  <p className="text-[11px] text-slate-500 font-mono mt-1 text-left">
+                    معادل: {formatCurrencyTomans(Number(expenseAmount))}
+                  </p>
+                ) : null}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  عنوان یا شرح خرید <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={expenseTitle}
+                  onChange={(e) => setExpenseTitle(e.target.value)}
+                  placeholder="مثال: خرید چسب چوب و سنباده برای کارگاه"
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-amber-600 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  تاریخ خرید (شمسی) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                  placeholder="مثال: 1405/07/02"
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 font-mono focus:border-amber-600 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  تصویر فاکتور / رسید (اختیاری)
+                </label>
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer border border-slate-200 transition-colors">
+                    <Upload className="w-3.5 h-3.5 text-slate-500" />
+                    <span>انتخاب تصویر فاکتور</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleReceiptUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  {expenseReceipt && (
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={expenseReceipt}
+                        alt="پیش‌نمایش فاکتور"
+                        className="w-10 h-10 object-cover rounded-lg border border-slate-200 shadow-2xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setExpenseReceipt(null)}
+                        className="text-[11px] text-rose-600 hover:underline cursor-pointer"
+                      >
+                        حذف عکس
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsExpenseModalOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingExpense}
+                  className="px-5 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-sm cursor-pointer disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>{isSubmittingExpense ? 'در حال ثبت...' : 'ثبت خرید و ارسال به مدیر'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Viewing Full Receipt Image Modal */}
+      {viewingReceipt && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-5 space-y-3 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <h4 className="font-bold text-xs text-slate-800">تصویر فاکتور / رسید خرید</h4>
+              <button
+                type="button"
+                onClick={() => setViewingReceipt(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-auto rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-center p-2">
+              <img
+                src={viewingReceipt}
+                alt="تصویر فاکتور"
+                className="max-w-full max-h-[65vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Worker Personal Card Expenses Full History & Status Modal */}
+      {isExpenseHistoryModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-right">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-amber-600" />
+                <div>
+                  <h3 className="font-bold text-sm text-slate-800">
+                    سوابق خریدهای ثبت‌شده با کارت شخصی
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    مشاهده وضعیت دقیق تسویه و پیگیری هزینه‌ها توسط مدیریت
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExpenseHistoryModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 cursor-pointer rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Summary Stats Banner */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center text-xs">
+                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                  <span className="text-slate-400 block text-[10px]">کل خریدها</span>
+                  <span className="font-bold font-mono text-slate-800 text-sm">
+                    {myExpenses.length} فقره
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                  <span className="text-amber-700 block text-[10px]">در انتظار تأیید</span>
+                  <span className="font-bold font-mono text-amber-900 text-xs">
+                    {formatCurrencyTomans(totalPendingExpense)}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                  <span className="text-emerald-700 block text-[10px]">تسویه‌شده مستقیم</span>
+                  <span className="font-bold font-mono text-emerald-900 text-xs">
+                    {formatCurrencyTomans(
+                      myExpenses
+                        .filter((e) => e.status === 'SETTLED')
+                        .reduce((sum, e) => sum + e.amount, 0)
+                    )}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-200">
+                  <span className="text-indigo-700 block text-[10px]">افزوده‌شده به حقوق</span>
+                  <span className="font-bold font-mono text-indigo-900 text-xs">
+                    {formatCurrencyTomans(
+                      myExpenses
+                        .filter((e) => e.status === 'ADDED_TO_SALARY')
+                        .reduce((sum, e) => sum + e.amount, 0)
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              {/* Expense List */}
+              <div className="space-y-3">
+                {myExpenses.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 text-xs">
+                    تاکنون هیچ خریدی با کارت شخصی ثبت نشده است.
+                  </div>
+                ) : (
+                  myExpenses.map((exp) => (
+                    <div
+                      key={exp.id}
+                      className="p-4 rounded-2xl border border-slate-200/90 bg-white hover:border-amber-300 shadow-2xs space-y-2.5 transition-all"
+                    >
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <div>
+                          <h4 className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                            <Receipt className="w-3.5 h-3.5 text-amber-600" />
+                            <span>{exp.title}</span>
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-mono mt-0.5 block">
+                            تاریخ خرید: {exp.date} • ثبت: {exp.createdAt ? new Date(exp.createdAt).toLocaleDateString('fa-IR') : '---'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold font-mono text-slate-900 text-xs bg-slate-100 px-2.5 py-1 rounded-lg">
+                            {formatCurrencyTomans(exp.amount)}
+                          </span>
+                          <span
+                            className={`text-xs px-2.5 py-1 rounded-lg font-bold border ${
+                              exp.status === 'SETTLED'
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                : exp.status === 'ADDED_TO_SALARY'
+                                ? 'bg-indigo-50 text-indigo-800 border-indigo-300'
+                                : exp.status === 'REJECTED'
+                                ? 'bg-rose-50 text-rose-800 border-rose-300'
+                                : 'bg-amber-50 text-amber-800 border-amber-300'
+                            }`}
+                          >
+                            {exp.status === 'SETTLED'
+                              ? '✓ تأیید و تسویه‌شده'
+                              : exp.status === 'ADDED_TO_SALARY'
+                              ? '+ تأیید و افزوده‌شده به حقوق'
+                              : exp.status === 'REJECTED'
+                              ? '✕ ردشده'
+                              : '⏳ در انتظار تأیید'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100 flex-wrap gap-2">
+                        <span>پرداخت‌کننده: <strong>کارت شخصی کارگر</strong></span>
+                        {exp.receiptUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingReceipt(exp.receiptUrl!)}
+                            className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 flex items-center gap-1 cursor-pointer font-semibold transition-colors"
+                          >
+                            <Eye className="w-3 h-3 text-amber-700" />
+                            <span>مشاهده تصویر فاکتور</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {exp.settlementNotes && (
+                        <div className="p-2 rounded-xl bg-slate-50 border border-slate-100 text-[11px] text-slate-600">
+                          <strong>یادداشت مدیر:</strong> {exp.settlementNotes}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsExpenseHistoryModalOpen(false);
+                  setIsExpenseModalOpen(true);
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                <span>ثبت فاکتور خرید جدید</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsExpenseHistoryModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200 cursor-pointer"
+              >
+                بستن
+              </button>
+            </div>
           </div>
         </div>
       )}

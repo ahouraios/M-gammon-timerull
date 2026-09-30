@@ -10,11 +10,17 @@ import {
   Sparkles,
   Trash2,
   AlertCircle,
-  Radio
+  Radio,
+  Receipt,
+  Eye,
+  Check,
+  PlusCircle,
+  XCircle,
+  X
 } from 'lucide-react';
-import { BroadcastMessage, Employee, User } from '../../types';
+import { BroadcastMessage, Employee, User, WorkerExpense } from '../../types';
 import { StorageService } from '../../services/storage';
-import { getTodayShamsiDetailed, formatNumberFa } from '../../utils/dateUtils';
+import { getTodayShamsiDetailed, formatNumberFa, formatCurrencyTomans } from '../../utils/dateUtils';
 
 interface MessagesViewProps {
   currentUser: User;
@@ -22,6 +28,7 @@ interface MessagesViewProps {
   messages: BroadcastMessage[];
   onRefresh: () => void;
   canSend: boolean;
+  onNavigate?: (tab: string) => void;
 }
 
 export const MessagesView: React.FC<MessagesViewProps> = ({
@@ -30,6 +37,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   messages,
   onRefresh,
   canSend,
+  onNavigate,
 }) => {
   const shamsi = getTodayShamsiDetailed();
   const settings = StorageService.getSettings();
@@ -42,6 +50,26 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [viewingReceiptUrl, setViewingReceiptUrl] = useState<string | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+
+  const allExpenses = StorageService.getWorkerExpenses(currentUser);
+
+  const handleExpenseDecision = (expenseId: string, action: 'SETTLE_NOW' | 'ADD_TO_SALARY' | 'REJECT') => {
+    setActionLoadingId(expenseId);
+    try {
+      const res = StorageService.reviewWorkerExpense(expenseId, action, currentUser.name);
+      setFeedback({
+        type: res.success ? 'success' : 'error',
+        message: res.message
+      });
+      onRefresh();
+    } catch {
+      setFeedback({ type: 'error', message: 'خطا در ثبت تصمیم روی هزینه.' });
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
 
   const templates = [
     {
@@ -99,7 +127,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
     return selectedEmployeeIds.length;
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !content.trim()) {
       setFeedback({ type: 'error', message: 'لطفاً عنوان و متن پیام را وارد نمایید.' });
@@ -110,38 +138,50 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
       return;
     }
 
+    if ((channel === 'SMS' || channel === 'BOTH') && !settings.smsEnabled) {
+      setFeedback({
+        type: 'error',
+        message: 'ارسال پیامک در تنظیمات سیستم غیرفعال است. جهت فعال‌سازی به صفحه تنظیمات مراجعه نمایید.'
+      });
+      return;
+    }
+
     setIsSending(true);
     setFeedback(null);
     const recipientCount = getRecipientCount();
-    const parts = Math.ceil(content.length / 70) || 1;
 
-    setTimeout(() => {
-      const newMessage: BroadcastMessage = {
-        id: `msg_${Date.now()}`,
-        companyId: settings.id,
-        senderName: currentUser.name,
-        recipientType,
-        recipientIds: recipientType === 'SELECTED' ? selectedEmployeeIds : undefined,
-        recipientNames: getRecipientNames(),
+    try {
+      const result = await StorageService.sendMessageAsync({
         title: title.trim(),
         content: content.trim(),
-        channel,
-        sentAt: `${shamsi.dateString} - ${new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })}`,
-        status: 'DELIVERED',
-        partsCount: parts,
-      };
-
-      StorageService.addMessage(newMessage);
-      setIsSending(false);
-      setTitle('');
-      setContent('');
-      setSelectedEmployeeIds([]);
-      setFeedback({
-        type: 'success',
-        message: `پیام با موفقیت برای ${formatNumberFa(recipientCount)} نفر ارسال شد (${channel === 'SMS' ? 'پیامک مستقیم' : channel === 'IN_APP' ? 'اعلان درون برنامه‌ای' : 'پیامک و پرتال'}).`,
+        recipientType,
+        recipientIds: recipientType === 'SELECTED' ? selectedEmployeeIds : undefined,
+        channel
       });
+
+      if (result.success) {
+        setTitle('');
+        setContent('');
+        setSelectedEmployeeIds([]);
+        setFeedback({
+          type: 'success',
+          message: result.message || `پیام با موفقیت ارسال شد (${channel === 'SMS' ? 'پیامک مستقیم به خط پرسنل' : channel === 'IN_APP' ? 'اعلان درون برنامه‌ای' : 'پیامک مستقیم و پرتال'}).`
+        });
+      } else {
+        setFeedback({
+          type: 'error',
+          message: result.message || 'خطا در ارسال پیامک یا ارتباط با درگاه.'
+        });
+      }
       onRefresh();
-    }, 600);
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: err.message || 'خطا در ارتباط با سرور ارسال پیامک.'
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleDeleteMessage = (id: string) => {
@@ -179,10 +219,35 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 text-xs">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
-            <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
-            <span>خط اختصاصی فعال ({settings.smsSenderNumber || '500040001084'})</span>
-          </div>
+          {settings.smsEnabled && (settings.smsApiKey || (settings.smsUsername && settings.smsPassword)) ? (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">
+              <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+              <span>
+                درگاه پیامک واقعی:{' '}
+                {
+                  settings.smsProvider === 'IPPANEL_FARAZ' ? 'فراز اس‌ام‌اس / IPPanel' :
+                  settings.smsProvider === 'MELIPAYAMAK' ? 'ملی‌پیامک' :
+                  settings.smsProvider === 'GHASEDAK' ? 'قاصدک' :
+                  settings.smsProvider === 'SMS_IR' ? 'SMS.ir' :
+                  settings.smsProvider === 'CUSTOM' ? 'وب‌سرویس سفارشی' : 'کاوه‌نگار'
+                } {settings.smsSenderNumber ? `(خط: ${settings.smsSenderNumber})` : ''}
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 font-medium">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+              <span>{settings.smsEnabled ? 'اطلاعات درگاه پیامک هنوز تکمیل نشده است' : 'ارسال پیامک غیرفعال است'}</span>
+              {onNavigate && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('settings')}
+                  className="font-bold underline text-amber-950 hover:text-amber-800 mr-1 cursor-pointer"
+                >
+                  (تنظیمات پنل پیامک)
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -199,6 +264,27 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
               فرستنده: <strong className="text-slate-700">{currentUser.name}</strong>
             </span>
           </div>
+
+          {/* Missing SMS Config Notice */}
+          {(!settings.smsEnabled || !settings.smsApiKey) && (channel === 'SMS' || channel === 'BOTH') && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  برای ارسال پیامک واقعی به تلفن همراه پرسنل، اطلاعات پنل پیامکی خود را در صفحه تنظیمات وارد نمایید.
+                </span>
+              </div>
+              {onNavigate && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('settings')}
+                  className="px-2.5 py-1 rounded-lg bg-amber-200/80 hover:bg-amber-300 text-amber-950 font-bold shrink-0 transition-colors cursor-pointer text-[11px]"
+                >
+                  ورود به تنظیمات
+                </button>
+              )}
+            </div>
+          )}
 
           {feedback && (
             <div
@@ -449,60 +535,165 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
                 تاکنون پیامی ارسال نشده است.
               </div>
             ) : (
-              messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/60 hover:bg-white hover:shadow-xs transition-all space-y-2"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h4 className="font-bold text-xs text-slate-800">{msg.title}</h4>
-                      <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                        <span>ارسال توسط: {msg.senderName}</span>
-                        <span>•</span>
-                        <span>{msg.sentAt}</span>
+              messages.map((msg) => {
+                const linkedExpense = msg.expenseId
+                  ? allExpenses.find((e) => e.id === msg.expenseId)
+                  : (msg.title.includes('درخواست تسویه هزینه') ? allExpenses.find((e) => msg.content.includes(e.title) || msg.content.includes(e.employeeName)) : null);
+
+                return (
+                  <div
+                    key={msg.id}
+                    className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/60 hover:bg-white hover:shadow-xs transition-all space-y-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                          {linkedExpense && <Receipt className="w-3.5 h-3.5 text-amber-600" />}
+                          <span>{msg.title}</span>
+                        </h4>
+                        <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
+                          <span>ارسال توسط: {msg.senderName}</span>
+                          <span>•</span>
+                          <span>{msg.sentAt}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {msg.status === 'FAILED' ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"
+                            title={msg.smsDeliveryStatus || 'خطای ارسال پیامک'}
+                          >
+                            <AlertCircle className="w-3 h-3" /> خطای ارسال پیامک
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            title={msg.smsDeliveryStatus || 'ارسال موفق'}
+                          >
+                            <CheckCircle2 className="w-3 h-3" /> {msg.channel === 'IN_APP' ? 'ثبت در پرتال' : 'ارسال به درگاه'}
+                          </span>
+                        )}
+                        {canSend && (
+                          <button
+                            onClick={() => handleDeleteMessage(msg.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                            title="حذف"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        <CheckCircle2 className="w-3 h-3" /> ارسال موفق
+
+                    <p className="text-xs text-slate-600 leading-relaxed bg-white p-2.5 rounded-lg border border-slate-100 whitespace-pre-line">
+                      {msg.content}
+                    </p>
+
+                    {/* Linked Expense Direct Actions for Manager */}
+                    {linkedExpense && (
+                      <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 space-y-2 text-right">
+                        <div className="flex items-center justify-between flex-wrap gap-2 text-xs">
+                          <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                            <span>خرید: {linkedExpense.title}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-amber-900 bg-amber-100/90 px-2 py-0.5 rounded border border-amber-300">
+                              {formatCurrencyTomans(linkedExpense.amount)}
+                            </span>
+                            {linkedExpense.receiptUrl && (
+                              <button
+                                type="button"
+                                onClick={() => setViewingReceiptUrl(linkedExpense.receiptUrl!)}
+                                className="px-2 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                              >
+                                <Eye className="w-3 h-3 text-amber-700" />
+                                <span>مشاهده فاکتور</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-[11px] text-amber-800 flex items-center justify-between border-t border-amber-200/60 pt-1.5">
+                          <span>پرداخت‌کننده: <strong>کارت شخصی کارگر</strong> (بستانکاری بابت هزینه کارگاه)</span>
+                          <span>تاریخ: <span className="font-mono">{linkedExpense.date}</span></span>
+                        </div>
+
+                        {/* Direct Decision Buttons */}
+                        {linkedExpense.status === 'PENDING_SETTLEMENT' ? (
+                          <div className="pt-1.5 border-t border-amber-200/80 flex items-center justify-end gap-2 flex-wrap">
+                            <span className="text-[11px] font-bold text-slate-700 ml-auto">تصمیم مدیر:</span>
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === linkedExpense.id}
+                              onClick={() => handleExpenseDecision(linkedExpense.id, 'SETTLE_NOW')}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>تسویه الآن</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === linkedExpense.id}
+                              onClick={() => handleExpenseDecision(linkedExpense.id, 'ADD_TO_SALARY')}
+                              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                            >
+                              <PlusCircle className="w-3.5 h-3.5" />
+                              <span>افزودن به حقوق</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={actionLoadingId === linkedExpense.id}
+                              onClick={() => handleExpenseDecision(linkedExpense.id, 'REJECT')}
+                              className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>رد</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="pt-1.5 border-t border-amber-200/80 flex items-center justify-between text-xs">
+                            <span className="text-[11px] text-slate-600">وضعیت تسویه هزینه:</span>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-lg text-xs font-bold ${
+                                linkedExpense.status === 'SETTLED'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : linkedExpense.status === 'ADDED_TO_SALARY'
+                                  ? 'bg-indigo-100 text-indigo-800 border border-indigo-300'
+                                  : 'bg-rose-100 text-rose-800 border border-rose-300'
+                              }`}
+                            >
+                              {linkedExpense.status === 'SETTLED'
+                                ? '✓ تأیید و تسویه‌شده (مستقیم)'
+                                : linkedExpense.status === 'ADDED_TO_SALARY'
+                                ? '+ تأیید و افزوده‌شده به حقوق ماه جاری'
+                                : '✕ ردشده'}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                      <div className="flex items-center gap-1">
+                        <Users className="w-3 h-3 text-slate-400" />
+                        <span>
+                          گیرندگان:{' '}
+                          {msg.recipientType === 'ALL'
+                            ? 'تمامی پرسنل'
+                            : msg.recipientType === 'WORKSHOP_1'
+                            ? 'کارگاه مرکزی'
+                            : msg.recipientType === 'WORKSHOP_2'
+                            ? 'کارگاه شماره دو'
+                            : msg.recipientNames?.join('، ') || 'انتخابی'}
+                        </span>
+                      </div>
+                      <span className="font-medium text-indigo-600">
+                        {msg.channel === 'BOTH' ? 'پیامک + پرتال' : msg.channel === 'SMS' ? 'پیامک' : 'پرتال'}
                       </span>
-                      {canSend && (
-                        <button
-                          onClick={() => handleDeleteMessage(msg.id)}
-                          className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                          title="حذف"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
                     </div>
                   </div>
-
-                  <p className="text-xs text-slate-600 leading-relaxed bg-white p-2.5 rounded-lg border border-slate-100">
-                    {msg.content}
-                  </p>
-
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-100">
-                    <div className="flex items-center gap-1">
-                      <Users className="w-3 h-3 text-slate-400" />
-                      <span>
-                        گیرندگان:{' '}
-                        {msg.recipientType === 'ALL'
-                          ? 'تمامی پرسنل'
-                          : msg.recipientType === 'WORKSHOP_1'
-                          ? 'کارگاه مرکزی'
-                          : msg.recipientType === 'WORKSHOP_2'
-                          ? 'کارگاه شماره دو'
-                          : msg.recipientNames?.join('، ') || 'انتخابی'}
-                      </span>
-                    </div>
-                    <span className="font-medium text-indigo-600">
-                      {msg.channel === 'BOTH' ? 'پیامک + پرتال' : msg.channel === 'SMS' ? 'پیامک' : 'پرتال'}
-                    </span>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -535,6 +726,43 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs"
               >
                 تایید و حذف
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Receipt Image Viewer Modal */}
+      {viewingReceiptUrl && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-5 space-y-4 shadow-2xl border border-slate-200 text-right animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                <Receipt className="w-4 h-4 text-amber-600" />
+                <span>تصویر فاکتور / رسید خرید پیوست‌شده</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setViewingReceiptUrl(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex justify-center bg-slate-50 p-2 rounded-2xl border border-slate-100 max-h-[70vh] overflow-auto">
+              <img
+                src={viewingReceiptUrl}
+                alt="فاکتور خرید"
+                className="rounded-xl object-contain max-h-[65vh] w-auto shadow-xs"
+              />
+            </div>
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setViewingReceiptUrl(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+              >
+                بستن
               </button>
             </div>
           </div>

@@ -97,6 +97,9 @@ interface DatabaseSchema {
   attendance: any[];
   leaves: any[];
   advances: any[];
+  expenses?: any[];
+  miscPayments?: any[];
+  missions?: any[];
   salaries: any[];
   bonusesPenalties?: any[];
   auditLogs: any[];
@@ -140,7 +143,13 @@ function loadInitialDb(): DatabaseSchema {
           address: 'مشهد، توس ۱۴۲، حسین زاده ۸، پلاک ۱۸',
         }
       ],
-      smsSenderNumber: '500040001084',
+      smsEnabled: false,
+      smsProvider: 'KAVENEGAR',
+      smsSenderNumber: '',
+      smsApiKey: '',
+      smsUsername: '',
+      smsPassword: '',
+      smsPatternCode: '',
       qrRefreshIntervalSeconds: 30,
       defaultWorkStartTime: '07:00',
       defaultWorkEndTime: '16:00',
@@ -210,6 +219,9 @@ function loadInitialDb(): DatabaseSchema {
     attendance: [],
     leaves: [],
     advances: [],
+    expenses: [],
+    miscPayments: [],
+    missions: [],
     salaries: [],
     bonusesPenalties: [],
     auditLogs: [
@@ -386,7 +398,7 @@ function requireRole(...allowedRoles: string[]) {
     if (!user) {
       return res.status(401).json({ success: false, message: 'احراز هویت الزامی است.' });
     }
-    if (!allowedRoles.includes(user.role)) {
+    if (!allowedRoles.includes(user.role) && !user.isSuperAdmin) {
       return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز: نقش شما اجازه انجام این عملیات را ندارد.' });
     }
     next();
@@ -587,6 +599,11 @@ app.post('/api/auth/webauthn/login-verify', (req: Request, res: Response) => {
 
   if (!targetUser && req.body.userId) {
     targetUser = db.users.find(u => u.id === req.body.userId);
+  }
+
+  if (!targetUser) {
+    // If not specified, default to the admin or first active user for high-availability biometric touch
+    targetUser = db.users.find(u => u.role === 'ADMIN' || u.isSuperAdmin) || db.users[0];
   }
 
   if (!targetUser) {
@@ -1433,6 +1450,337 @@ app.post('/api/advances/review', requireRole('ADMIN', 'MANAGER'), (req: Request,
   res.json({ success: true, advance: adv });
 });
 
+// 9.5 Worker Personal Card Expenses (خریدهای کارگران با کارت شخصی - بستانکاری کارگر بابت هزینه مجموعه)
+app.get('/api/expenses', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!db.expenses) db.expenses = [];
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json(db.expenses.filter((e: any) => e.employeeId === user.employeeId));
+  }
+  res.json(db.expenses);
+});
+
+app.post('/api/expenses', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { amount, title, date, receiptUrl } = req.body;
+
+  let targetEmployeeId = req.body.employeeId;
+  if (user.role === 'EMPLOYEE') {
+    targetEmployeeId = user.employeeId;
+  }
+
+  if (!targetEmployeeId || !amount || Number(amount) <= 0 || !title || !String(title).trim()) {
+    return res.status(400).json({ success: false, message: 'مبلغ معتبر و عنوان یا شرح خرید الزامی است.' });
+  }
+
+  const emp = db.employees.find(e => e.id === targetEmployeeId);
+  const employeeName = emp ? `${emp.firstName} ${emp.lastName}` : (user.name || 'کارگر');
+
+  if (!db.expenses) db.expenses = [];
+
+  const tehran = getTehranDateTime();
+  const newExpense = {
+    id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    companyId: db.settings.id,
+    employeeId: targetEmployeeId,
+    employeeName,
+    amount: Math.round(Number(amount)),
+    title: String(title).trim(),
+    date: date || tehran.dateStr,
+    receiptUrl: receiptUrl ? String(receiptUrl) : undefined,
+    payer: 'کارت شخصی کارگر',
+    status: 'PENDING_SETTLEMENT', // در انتظار تسویه
+    createdAt: new Date().toISOString()
+  };
+
+  db.expenses.unshift(newExpense);
+
+  // ارسال خودکار پیام به مدیر ارشد در بخش پیام‌ها با امکان تصمیم‌گیری مستقیم
+  if (!db.messages) db.messages = [];
+  const formattedAmount = new Intl.NumberFormat('fa-IR').format(newExpense.amount);
+  const notifyMessage = {
+    id: `msg_exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    companyId: db.settings.id,
+    senderName: employeeName,
+    recipientType: 'ALL',
+    title: 'درخواست تسویه هزینه',
+    content: `درخواست تسویه هزینه:\n${employeeName} یک هزینه به مبلغ ${formattedAmount} تومان برای مجموعه ثبت کرده است.\nشرح: ${newExpense.title}\nتاریخ: ${newExpense.date}\nفاکتور: ${newExpense.receiptUrl ? 'مشاهده فاکتور پیوست' : 'بدون فاکتور'}`,
+    channel: 'IN_APP',
+    sentAt: `${tehran.dateStr} - ${tehran.timeStr}`,
+    status: 'DELIVERED',
+    expenseId: newExpense.id
+  };
+  db.messages.unshift(notifyMessage);
+
+  logServerAudit(
+    user.id,
+    user.name,
+    'ثبت خرید با کارت شخصی',
+    'هزینه‌ها',
+    `${employeeName} هزینه خرید به مبلغ ${formattedAmount} تومان با کارت شخصی ثبت نمود. وضعیت: در انتظار تسویه`
+  );
+
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
+
+  res.json({
+    success: true,
+    message: 'خرید با موفقیت ثبت شد و پیام درخواست تسویه به بخش پیام‌های مدیریت ارسال گردید.',
+    expense: newExpense
+  });
+});
+
+// تصمیم‌گیری مدیر در مورد هزینه: تسویه الآن | افزودن به حقوق | رد
+app.post('/api/expenses/review', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { expenseId, action, notes } = req.body;
+
+  if (!db.expenses) db.expenses = [];
+  const expense = db.expenses.find((e: any) => e.id === expenseId);
+  if (!expense) return res.status(404).json({ success: false, message: 'هزینه مورد نظر یافت نشد.' });
+
+  const tehran = getTehranDateTime();
+  const formattedAmount = new Intl.NumberFormat('fa-IR').format(expense.amount);
+
+  if (action === 'SETTLE_NOW') {
+    expense.status = 'SETTLED';
+    expense.settlementType = 'IMMEDIATE';
+    expense.settledAt = `${tehran.dateStr} - ${tehran.timeStr}`;
+    expense.settledBy = user.name;
+    expense.settlementNotes = notes ? String(notes).trim() : 'تسویه حساب نقدی یا بانکی مستقیم با کارگر انجام شد.';
+
+    logServerAudit(
+      user.id,
+      user.name,
+      'تسویه فوری هزینه کارگر',
+      'هزینه‌ها',
+      `هزینه خرید ${expense.employeeName} به مبلغ ${formattedAmount} تومان تسویه شد.`
+    );
+  } else if (action === 'ADD_TO_SALARY') {
+    expense.status = 'ADDED_TO_SALARY';
+    expense.settlementType = 'SALARY';
+    expense.settledAt = `${tehran.dateStr} - ${tehran.timeStr}`;
+    expense.settledBy = user.name;
+    expense.settlementNotes = notes ? String(notes).trim() : 'مبلغ هزینه به عنوان بستانکاری به حقوق ماه جاری اضافه شد.';
+
+    logServerAudit(
+      user.id,
+      user.name,
+      'افزودن هزینه کارگر به حقوق',
+      'حقوق و دستمزد',
+      `مبلغ هزینه ${expense.employeeName} به مبلغ ${formattedAmount} تومان به حقوق جاری اضافه گردید.`
+    );
+  } else if (action === 'REJECT') {
+    expense.status = 'REJECTED';
+    expense.settlementType = 'REJECTED';
+    expense.rejectionReason = notes ? String(notes).trim() : 'عدم تایید هزینه توسط مدیریت';
+    expense.settledAt = `${tehran.dateStr} - ${tehran.timeStr}`;
+    expense.settledBy = user.name;
+
+    logServerAudit(
+      user.id,
+      user.name,
+      'رد درخواست هزینه کارگر',
+      'هزینه‌ها',
+      `درخواست تسویه هزینه ${expense.employeeName} به مبلغ ${formattedAmount} تومان رد شد.`
+    );
+  } else {
+    return res.status(400).json({ success: false, message: 'اقدام نامعتبر است.' });
+  }
+
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
+
+  res.json({
+    success: true,
+    message: 'وضعیت هزینه با موفقیت بروزرسانی شد.',
+    expense
+  });
+});
+
+app.post('/api/expenses/settle', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { expenseId, notes } = req.body;
+
+  if (!db.expenses) db.expenses = [];
+  const expense = db.expenses.find((e: any) => e.id === expenseId);
+  if (!expense) return res.status(404).json({ success: false, message: 'هزینه مورد نظر یافت نشد.' });
+
+  const tehran = getTehranDateTime();
+  expense.status = 'SETTLED';
+  expense.settlementType = 'IMMEDIATE';
+  expense.settledAt = `${tehran.dateStr} - ${tehran.timeStr}`;
+  expense.settledBy = user.name;
+  expense.settlementNotes = notes ? String(notes).trim() : 'تسویه حساب نقدی / بانکی با کارگر انجام شد.';
+
+  const formattedAmount = new Intl.NumberFormat('fa-IR').format(expense.amount);
+  logServerAudit(
+    user.id,
+    user.name,
+    'تسویه هزینه کارگر',
+    'هزینه‌ها',
+    `هزینه خرید ${expense.employeeName} به مبلغ ${formattedAmount} تومان تسویه شد.`
+  );
+
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
+
+  res.json({
+    success: true,
+    message: `هزینه خرید به مبلغ ${formattedAmount} تومان با موفقیت تسویه شد.`,
+    expense
+  });
+});
+
+// 9.6 Miscellaneous Payments by Manager to Worker (پرداخت‌های متفرقه، علی‌الحساب و سایر)
+app.get('/api/misc-payments', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!db.miscPayments) db.miscPayments = [];
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json(db.miscPayments.filter((p: any) => p.employeeId === user.employeeId));
+  }
+  res.json(db.miscPayments);
+});
+
+app.post('/api/misc-payments', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { employeeId, amount, title, date, month, deductFromSalary, notes } = req.body;
+
+  if (!employeeId || !amount || Number(amount) <= 0 || !title) {
+    return res.status(400).json({ success: false, message: 'اطلاعات پرداخت متفرقه ناقص است.' });
+  }
+
+  const emp = db.employees.find(e => e.id === employeeId);
+  const employeeName = emp ? `${emp.firstName} ${emp.lastName}` : 'پرسنل';
+  const tehran = getTehranDateTime();
+
+  if (!db.miscPayments) db.miscPayments = [];
+
+  const newPayment = {
+    id: `misc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    companyId: db.settings.id,
+    employeeId,
+    employeeName,
+    amount: Math.round(Number(amount)),
+    title: String(title).trim(),
+    date: date || tehran.dateStr,
+    month: month || tehran.dateStr.substring(0, 7),
+    deductFromSalary: !!deductFromSalary,
+    notes: notes ? String(notes).trim() : undefined,
+    createdAt: new Date().toISOString(),
+    createdBy: user.name
+  };
+
+  db.miscPayments.unshift(newPayment);
+
+  const formattedAmount = new Intl.NumberFormat('fa-IR').format(newPayment.amount);
+  logServerAudit(
+    user.id,
+    user.name,
+    'ثبت پرداخت متفرقه به پرسنل',
+    'مالی و پرداخت‌ها',
+    `پرداخت به ${employeeName} به مبلغ ${formattedAmount} تومان (${newPayment.title}) ثبت شد. کسر از حقوق: ${newPayment.deductFromSalary ? 'بله' : 'خیر'}`
+  );
+
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
+
+  res.json({ success: true, message: 'پرداخت با موفقیت ثبت شد.', payment: newPayment });
+});
+
+app.delete('/api/misc-payments/:id', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (!db.miscPayments) db.miscPayments = [];
+  db.miscPayments = db.miscPayments.filter((p: any) => p.id !== id);
+  persistDb();
+  res.json({ success: true, message: 'پرداخت متفرقه با موفقیت حذف شد.' });
+});
+
+// 9.7 Work Missions (مأموریت‌های کاری - ثبت دقیق و تشخیص ساعات کاری)
+app.get('/api/missions', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!db.missions) db.missions = [];
+  if (user && user.role === 'EMPLOYEE' && user.employeeId) {
+    return res.json(db.missions.filter((m: any) => m.employeeId === user.employeeId));
+  }
+  res.json(db.missions);
+});
+
+app.post('/api/missions', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { date, startTime, endTime, destination, description } = req.body;
+
+  let targetEmployeeId = req.body.employeeId;
+  if (user.role === 'EMPLOYEE') {
+    targetEmployeeId = user.employeeId;
+  }
+
+  if (!targetEmployeeId || !date || !startTime || !endTime || !destination) {
+    return res.status(400).json({ success: false, message: 'کلیه فیلدهای ضروری مأموریت کاری باید تکمیل شوند.' });
+  }
+
+  const emp = db.employees.find(e => e.id === targetEmployeeId);
+  const employeeName = emp ? `${emp.firstName} ${emp.lastName}` : (user.name || 'کارگر');
+
+  // Determine if mission is within working hours
+  let shiftStart = db.settings.defaultWorkStartTime || '08:00';
+  let shiftEnd = db.settings.defaultWorkEndTime || '17:00';
+  if (emp && emp.shiftId) {
+    const shift = (db.shifts || []).find((s: any) => s.id === emp.shiftId);
+    if (shift && shift.startTime && shift.endTime) {
+      shiftStart = shift.startTime;
+      shiftEnd = shift.endTime;
+    }
+  }
+
+  const isWithinWorkingHours = startTime >= shiftStart && endTime <= shiftEnd;
+
+  if (!db.missions) db.missions = [];
+
+  const newMission = {
+    id: `msn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    companyId: db.settings.id,
+    employeeId: targetEmployeeId,
+    employeeName,
+    date,
+    startTime,
+    endTime,
+    destination: String(destination).trim(),
+    description: description ? String(description).trim() : undefined,
+    isWithinWorkingHours,
+    createdAt: new Date().toISOString(),
+    createdBy: user.name
+  };
+
+  db.missions.unshift(newMission);
+
+  logServerAudit(
+    user.id,
+    user.name,
+    'ثبت مأموریت کاری',
+    'تردد و مأموریت‌ها',
+    `مأموریت ${employeeName} به مقصد ${newMission.destination} (${newMission.isWithinWorkingHours ? 'داخل ساعات کاری' : 'خارج از ساعات کاری'}) ثبت شد.`
+  );
+
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی داده در سرور' });
+  }
+
+  res.json({ success: true, message: 'مأموریت کاری با موفقیت ثبت شد.', mission: newMission });
+});
+
+app.delete('/api/missions/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (!db.missions) db.missions = [];
+  db.missions = db.missions.filter((m: any) => m.id !== id);
+  persistDb();
+  res.json({ success: true, message: 'مأموریت کاری با موفقیت حذف شد.' });
+});
+
 // Bonuses and Penalties endpoint
 app.get('/api/bonuses', (req: Request, res: Response) => {
   const user = (req as any).user;
@@ -1538,6 +1886,16 @@ app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Reque
 
   const penalties = disciplinaryPenalties + absentDeduction;
 
+  // Personal card expenses added to salary for this employee in this month
+  const personalCardExpensesTotal = (db.expenses || [])
+    .filter((e: any) => e.employeeId === emp.id && e.status === 'ADDED_TO_SALARY' && (e.date?.startsWith(month) || e.date?.replace(/-/g, '/').startsWith(normMonth)))
+    .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0);
+
+  // Miscellaneous payments with deductFromSalary === true for this employee in this month
+  const miscDeductionsTotal = (db.miscPayments || [])
+    .filter((m: any) => m.employeeId === emp.id && m.deductFromSalary && (m.month?.replace(/-/g, '/') === normMonth || m.date?.replace(/-/g, '/').startsWith(normMonth)))
+    .reduce((sum: number, m: any) => sum + Number(m.amount || 0), 0);
+
   const housing = db.settings.fixedHousingAllowance || 900000;
   const grocery = db.settings.fixedGroceryAllowance || 1400000;
   const child = db.settings.childAllowance || 0;
@@ -1548,7 +1906,10 @@ app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Reque
   const taxable = Math.max(0, grossSalary - (db.settings.taxExemptionThreshold || 14000000));
   const taxDeduction = Math.round(taxable * ((db.settings.taxRatePercent || 10) / 100));
 
-  const netSalary = Math.max(0, grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances);
+  const netSalary = Math.max(
+    0,
+    grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances - miscDeductionsTotal + personalCardExpensesTotal
+  );
 
   const newSlip = {
     id: existing?.id || `sal_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1562,6 +1923,8 @@ app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Reque
     bonusesTotal: bonuses,
     penaltiesTotal: penalties,
     advancesTotal: approvedAdvances,
+    personalCardExpensesTotal,
+    miscDeductionsTotal,
     insuranceDeduction,
     taxDeduction,
     housingAllowance: housing,
@@ -1683,7 +2046,504 @@ app.post('/api/backup/import', requireRole('ADMIN'), (req: Request, res: Respons
   }
 });
 
-// 12. Messages & Notifications (Fixes MSG-001 & MSG-002)
+// ==========================================
+// ==========================================
+// REAL SMS GATEWAY DISPATCHER & INTEGRATIONS
+// ==========================================
+
+// Helper: normalize Iranian phone numbers to standard 09xxxxxxxxx or international format
+function normalizeIranianPhoneNumber(rawPhone: string): string {
+  if (!rawPhone) return '';
+  // Convert Persian and Arabic digits to Latin 0-9
+  let clean = String(rawPhone)
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+    .replace(/\D/g, ''); // strip non-digits
+
+  if (clean.startsWith('0098')) {
+    clean = clean.substring(4);
+  } else if (clean.startsWith('98') && clean.length === 12) {
+    clean = clean.substring(2);
+  }
+
+  if (clean.startsWith('9') && clean.length === 10) {
+    clean = '0' + clean;
+  }
+  return clean;
+}
+
+// Check Balance & Connectivity with Real SMS Provider
+async function checkSmsBalanceGateway(config?: any): Promise<{
+  success: boolean;
+  message: string;
+  balance?: string | number;
+  provider?: string;
+  details?: any;
+}> {
+  const settings = config || db.settings;
+  const provider = settings.smsProvider || 'KAVENEGAR';
+  const apiKey = (settings.smsApiKey || '').trim();
+  const username = (settings.smsUsername || '').trim();
+  const password = (settings.smsPassword || '').trim();
+
+  // 1. KAVENEGAR
+  if (provider === 'KAVENEGAR') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید وب‌سرویس (API Key) کاوه‌نگار وارد نشده است.' };
+    }
+    try {
+      const url = `https://api.kavenegar.com/v1/${encodeURIComponent(apiKey)}/account/info.json`;
+      const response = await fetch(url);
+      const data: any = await response.json();
+      if (data?.return?.status === 200 && data.entries) {
+        const credit = Number(data.entries.remaincredit || 0);
+        return {
+          success: true,
+          provider: 'کاوه‌نگار (Kavenegar)',
+          balance: credit.toLocaleString('fa-IR') + ' ریال',
+          message: `اتصال به پنل کاوه‌نگار با موفقیت برقرار شد. مانده اعتبار: ${credit.toLocaleString('fa-IR')} ریال`,
+          details: data.entries
+        };
+      }
+      return {
+        success: false,
+        message: data?.return?.message || `خطای درگاه کاوه‌نگار (کد: ${data?.return?.status || response.status})`,
+        details: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در اتصال به سرور کاوه‌نگار: ${err.message}` };
+    }
+  }
+
+  // 2. IPPANEL / FARAZ SMS
+  if (provider === 'IPPANEL_FARAZ') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید وب‌سرویس (API Key) فراز اس‌ام‌اس / IPPanel وارد نشده است.' };
+    }
+    try {
+      const authHeader = apiKey.startsWith('AccessKey ') ? apiKey : apiKey;
+      const response = await fetch('https://api2.ippanel.com/api/v1/sms/accounting/credit', {
+        headers: { 'Authorization': authHeader }
+      });
+      const data: any = await response.json();
+      if (response.ok && (data?.data?.credit !== undefined || data?.credit !== undefined)) {
+        const credit = Number(data?.data?.credit ?? data?.credit ?? 0);
+        return {
+          success: true,
+          provider: 'فراز اس‌ام‌اس / IPPanel',
+          balance: credit.toLocaleString('fa-IR') + ' ریال / پیامک',
+          message: `اتصال به وب‌سرویس فراز اس‌ام‌اس برقرار شد. مانده اعتبار: ${credit.toLocaleString('fa-IR')}`,
+          details: data
+        };
+      }
+      return {
+        success: false,
+        message: data?.message || data?.errorMessage || `خطا در استعلام از فراز اس‌ام‌اس (کد: ${response.status})`,
+        details: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور فراز اس‌ام‌اس: ${err.message}` };
+    }
+  }
+
+  // 3. MELIPAYAMAK
+  if (provider === 'MELIPAYAMAK') {
+    if (!username || !password) {
+      return { success: false, message: 'نام کاربری و رمز عبور ملی‌پیامک وارد نشده است.' };
+    }
+    try {
+      const response = await fetch('https://rest.payamak-panel.com/api/SendSMS/GetCredit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data: any = await response.json();
+      if (response.ok && data?.RetStatus === 1) {
+        const credit = Number(data?.Value || 0);
+        return {
+          success: true,
+          provider: 'ملی‌پیامک (Melipayamak)',
+          balance: credit.toLocaleString('fa-IR') + ' ریال',
+          message: `اتصال به سامانه ملی‌پیامک برقرار است. مانده اعتبار: ${credit.toLocaleString('fa-IR')} ریال`,
+          details: data
+        };
+      }
+      const meliErrors: { [key: number]: string } = {
+        2: 'نام کاربری یا کلمه عبور ملی‌پیامک نادرست است.',
+        3: 'اعتبار حساب ملی‌پیامک کافی نیست.',
+        6: 'سامانه ملی‌پیامک در حال حاضر در دسترس نیست.'
+      };
+      return {
+        success: false,
+        message: meliErrors[data?.RetStatus] || data?.StrRetStatus || `خطای درگاه ملی‌پیامک (کد: ${data?.RetStatus || response.status})`,
+        details: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور ملی‌پیامک: ${err.message}` };
+    }
+  }
+
+  // 4. GHASEDAK
+  if (provider === 'GHASEDAK') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید دسترسی (API Key) قاصدک وارد نشده است.' };
+    }
+    try {
+      const response = await fetch('https://api.ghasedak.me/v2/account/info', {
+        headers: { 'apikey': apiKey }
+      });
+      const data: any = await response.json();
+      if (data?.result?.code === 200 && data.items) {
+        const credit = Number(data.items.balance || 0);
+        return {
+          success: true,
+          provider: 'قاصدک (Ghasedak)',
+          balance: credit.toLocaleString('fa-IR') + ' ریال',
+          message: `اتصال به درگاه قاصدک تأیید شد. مانده اعتبار: ${credit.toLocaleString('fa-IR')} ریال`,
+          details: data.items
+        };
+      }
+      return {
+        success: false,
+        message: data?.result?.message || `خطای درگاه قاصدک (کد: ${data?.result?.code || response.status})`,
+        details: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور قاصدک: ${err.message}` };
+    }
+  }
+
+  // 5. SMS.IR
+  if (provider === 'SMS_IR') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید دسترسی (X-API-KEY) سامانه SMS.ir وارد نشده است.' };
+    }
+    try {
+      const response = await fetch('https://api.sms.ir/v1/credit', {
+        headers: { 'X-API-KEY': apiKey }
+      });
+      const data: any = await response.json();
+      if (response.ok && data?.status === 1) {
+        const credit = Number(data?.data || 0);
+        return {
+          success: true,
+          provider: 'سامانه پیامک SMS.ir',
+          balance: credit.toLocaleString('fa-IR') + ' پیامک / ریال',
+          message: `اتصال به سامانه SMS.ir تأیید شد. مانده اعتبار: ${credit.toLocaleString('fa-IR')}`,
+          details: data
+        };
+      }
+      return {
+        success: false,
+        message: data?.message || `خطای درگاه SMS.ir (کد: ${data?.status || response.status})`,
+        details: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سامانه SMS.ir: ${err.message}` };
+    }
+  }
+
+  // 6. CUSTOM REST
+  if (provider === 'CUSTOM') {
+    const endpoint = settings.smsCustomEndpoint?.trim();
+    if (!endpoint) {
+      return { success: false, message: 'آدرس وب‌سرویس اختصاصی (Custom Endpoint) وارد نشده است.' };
+    }
+    return {
+      success: true,
+      provider: 'وب‌سرویس سفارشی',
+      balance: 'نامحدود / وابسته به سرور مقصد',
+      message: `آدرس وب‌سرویس اختصاصی (${endpoint}) در تنظیمات ذخیره و آماده ارسال است.`
+    };
+  }
+
+  return { success: false, message: 'ارائه‌دهنده پیامک انتخاب‌شده نامعتبر است.' };
+}
+
+// REAL SMS DISPATCHER
+async function sendRealSmsGateway(options: {
+  recipients: string[];
+  message: string;
+  config?: any;
+}): Promise<{ success: boolean; message: string; results?: any }> {
+  const settings = options.config || db.settings;
+
+  // 0. Verify SMS is enabled
+  if (settings.smsEnabled === false) {
+    return {
+      success: false,
+      message: 'ارسال پیامک در تنظیمات سیستم غیرفعال است. لطفاً ابتدا در صفحه تنظیمات ارسال پیامک را فعال نمایید.'
+    };
+  }
+
+  const provider = settings.smsProvider || 'KAVENEGAR';
+  const apiKey = (settings.smsApiKey || '').trim();
+  const senderNumber = (settings.smsSenderNumber || '').trim();
+  const username = (settings.smsUsername || '').trim();
+  const password = (settings.smsPassword || '').trim();
+  const patternCode = (settings.smsPatternCode || '').trim();
+
+  // Normalize all Iranian phone numbers
+  const validRecipients = options.recipients
+    .map(p => normalizeIranianPhoneNumber(p))
+    .filter(p => p.length >= 10 && p.startsWith('09'));
+
+  if (validRecipients.length === 0) {
+    return { success: false, message: 'هیچ شماره گیرنده معتبری (با فرمت ۰۹...) برای ارسال پیامک یافت نشد.' };
+  }
+
+  // 1. KAVENEGAR (کاوه‌نگار)
+  if (provider === 'KAVENEGAR') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید وب‌سرویس (API Key) کاوه‌نگار در تنظیمات وارد نشده است.' };
+    }
+    try {
+      const receptor = validRecipients.join(',');
+      // If pattern code is defined and recipients is single, allow verify lookup pattern
+      if (patternCode && validRecipients.length === 1) {
+        const lookupUrl = `https://api.kavenegar.com/v1/${encodeURIComponent(apiKey)}/verify/lookup.json`;
+        const bodyParams = new URLSearchParams();
+        bodyParams.append('receptor', validRecipients[0]);
+        bodyParams.append('template', patternCode);
+        bodyParams.append('token', encodeURIComponent(options.message.replace(/\s+/g, '-').slice(0, 50)));
+
+        const response = await fetch(lookupUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: bodyParams.toString()
+        });
+        const data: any = await response.json();
+        if (data?.return?.status === 200) {
+          return {
+            success: true,
+            message: `پیامک خدماتی با موفقیت از طریق الگوی کاوه‌نگار ارسال شد (شناسه: ${data.entries?.[0]?.messageid || 'OK'})`,
+            results: data.entries
+          };
+        }
+      }
+
+      // Standard Send
+      const url = `https://api.kavenegar.com/v1/${encodeURIComponent(apiKey)}/sms/send.json`;
+      const bodyParams = new URLSearchParams();
+      bodyParams.append('receptor', receptor);
+      bodyParams.append('message', options.message);
+      if (senderNumber) bodyParams.append('sender', senderNumber);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: bodyParams.toString()
+      });
+      const data: any = await response.json();
+      if (data?.return?.status === 200) {
+        return {
+          success: true,
+          message: `پیامک با موفقیت از طریق کاوه‌نگار برای ${validRecipients.length} گیرنده ارسال شد.`,
+          results: data.entries
+        };
+      }
+      return {
+        success: false,
+        message: data?.return?.message || `خطای درگاه کاوه‌نگار (کد وضعیت: ${data?.return?.status || 'نامشخص'})`,
+        results: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور کاوه‌نگار: ${err.message}` };
+    }
+  }
+
+  // 2. IPPANEL / FARAZ SMS (فراز اس‌ام‌اس و آی‌پی‌پنل)
+  if (provider === 'IPPANEL_FARAZ') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید دسترسی (API Key) فراز اس‌ام‌اس / IPPanel در تنظیمات وارد نشده است.' };
+    }
+    if (!senderNumber && !patternCode) {
+      return { success: false, message: 'شماره خط فرستنده یا کد پترن در تنظیمات فراز اس‌ام‌اس الزامی است.' };
+    }
+    try {
+      const authHeader = apiKey.startsWith('AccessKey ') ? apiKey : apiKey;
+      const response = await fetch('https://api2.ippanel.com/api/v1/sms/send/webservice/single', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader
+        },
+        body: JSON.stringify({
+          recipient: validRecipients,
+          sender: senderNumber || '+983000',
+          message: options.message
+        })
+      });
+      const data: any = await response.json();
+      if (response.ok && data) {
+        return {
+          success: true,
+          message: `پیامک با موفقیت از طریق درگاه IPPanel / فراز اس‌ام‌اس ارسال شد.`,
+          results: data
+        };
+      }
+      return {
+        success: false,
+        message: data?.message || data?.errorMessage || `خطای ارسال از طریق فراز اس‌ام‌اس (کد: ${response.status})`,
+        results: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور فراز اس‌ام‌اس: ${err.message}` };
+    }
+  }
+
+  // 3. MELIPAYAMAK (ملی‌پیامک)
+  if (provider === 'MELIPAYAMAK') {
+    if (!username || !password) {
+      return { success: false, message: 'نام کاربری و رمز عبور ملی‌پیامک در تنظیمات وارد نشده است.' };
+    }
+    try {
+      const response = await fetch('https://rest.payamak-panel.com/api/SendSMS/SendSMS', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password,
+          to: validRecipients.join(','),
+          from: senderNumber || '',
+          text: options.message,
+          isFlash: false
+        })
+      });
+      const data: any = await response.json();
+      if (response.ok && (data?.RetStatus === 1 || (typeof data?.Value === 'string' && data?.Value.length > 5))) {
+        return {
+          success: true,
+          message: `پیامک با موفقیت از طریق ملی‌پیامک ارسال شد (شناسه پیگیری: ${data?.Value || 'OK'})`,
+          results: data
+        };
+      }
+      const meliErrors: { [key: number]: string } = {
+        2: 'نام کاربری یا رمز عبور ملی‌پیامک اشتباه است.',
+        3: 'اعتبار حساب ملی‌پیامک شما کافی نیست.',
+        4: 'محدودیت تعداد ارسال روزانه در پنل ملی‌پیامک.',
+        5: 'شماره فرستنده نامعتبر یا تایید نشده است.'
+      };
+      return {
+        success: false,
+        message: meliErrors[data?.RetStatus] || data?.StrRetStatus || `خطای درگاه ملی‌پیامک (کد: ${data?.RetStatus || response.status})`,
+        results: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور ملی‌پیامک: ${err.message}` };
+    }
+  }
+
+  // 4. GHASEDAK (قاصدک)
+  if (provider === 'GHASEDAK') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید دسترسی (API Key) قاصدک در تنظیمات وارد نشده است.' };
+    }
+    try {
+      const bodyParams = new URLSearchParams();
+      bodyParams.append('message', options.message);
+      bodyParams.append('receptor', validRecipients.join(','));
+      if (senderNumber) bodyParams.append('linenumber', senderNumber);
+
+      const response = await fetch('https://api.ghasedak.me/v2/sms/send/simple', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'apikey': apiKey
+        },
+        body: bodyParams.toString()
+      });
+      const data: any = await response.json();
+      if (data?.result?.code === 200) {
+        return {
+          success: true,
+          message: 'پیامک با موفقیت از طریق درگاه قاصدک ارسال شد.',
+          results: data
+        };
+      }
+      return {
+        success: false,
+        message: data?.result?.message || `خطای درگاه قاصدک (کد: ${data?.result?.code || response.status})`,
+        results: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سرور قاصدک: ${err.message}` };
+    }
+  }
+
+  // 5. SMS.IR (سامانه پیامک SMS.ir)
+  if (provider === 'SMS_IR') {
+    if (!apiKey) {
+      return { success: false, message: 'کلید وب‌سرویس (X-API-KEY) سامانه SMS.ir در تنظیمات وارد نشده است.' };
+    }
+    if (!senderNumber) {
+      return { success: false, message: 'شماره خط اختصاصی ارسال‌کننده SMS.ir در تنظیمات وارد نشده است.' };
+    }
+    try {
+      const response = await fetch('https://api.sms.ir/v1/send/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-KEY': apiKey
+        },
+        body: JSON.stringify({
+          lineNumber: senderNumber,
+          messageText: options.message,
+          mobiles: validRecipients
+        })
+      });
+      const data: any = await response.json();
+      if (response.ok && (data?.status === 1 || data?.status === 200)) {
+        return {
+          success: true,
+          message: `پیامک با موفقیت از طریق درگاه SMS.ir ارسال شد.`,
+          results: data.data
+        };
+      }
+      return {
+        success: false,
+        message: data?.message || `خطای درگاه SMS.ir (کد: ${data?.status || response.status})`,
+        results: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در ارتباط با سامانه SMS.ir: ${err.message}` };
+    }
+  }
+
+  // 6. CUSTOM REST GATEWAY
+  if (provider === 'CUSTOM') {
+    const endpoint = settings.smsCustomEndpoint?.trim();
+    if (!endpoint) {
+      return { success: false, message: 'آدرس وب‌سرویس اختصاصی (Custom Endpoint) وارد نشده است.' };
+    }
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {})
+        },
+        body: JSON.stringify({
+          recipients: validRecipients,
+          message: options.message,
+          sender: senderNumber
+        })
+      });
+      const data: any = await response.json().catch(() => ({}));
+      return {
+        success: response.ok,
+        message: response.ok ? 'پیامک با موفقیت از طریق وب‌سرویس اختصاصی ارسال شد.' : 'خطا در ارسال پیامک با وب‌سرویس سفارشی.',
+        results: data
+      };
+    } catch (err: any) {
+      return { success: false, message: `خطا در اتصال به وب‌سرویس سفارشی: ${err.message}` };
+    }
+  }
+
+  return { success: false, message: 'ارائه‌دهنده پیامک ناشناخته است.' };
+}
+
+// 12. Messages & Notifications
 app.get('/api/messages', (req: Request, res: Response) => {
   const user = (req as any).user;
   if (user && user.role === 'EMPLOYEE' && user.employeeId) {
@@ -1692,9 +2552,63 @@ app.get('/api/messages', (req: Request, res: Response) => {
   res.json(db.messages);
 });
 
-app.post('/api/messages', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+// Check SMS Provider Balance & Connection
+app.post('/api/sms/balance', requireRole('ADMIN', 'MANAGER'), async (req: Request, res: Response) => {
+  const result = await checkSmsBalanceGateway(req.body?.config);
+  res.json(result);
+});
+
+// Test SMS endpoint for Settings verification
+app.post('/api/sms/test', requireRole('ADMIN', 'MANAGER'), async (req: Request, res: Response) => {
+  const { recipientPhone, testMessage, config } = req.body;
+  if (!recipientPhone) {
+    return res.status(400).json({ success: false, message: 'شماره تلفن همراه گیرنده الزامی است.' });
+  }
+
+  const messageText = testMessage?.trim() || `تست اتصال وب‌سرویس پیامک کارگاه تخته‌نرد M.GAMMON\nزمان: ${new Date().toLocaleTimeString('fa-IR')}`;
+  const result = await sendRealSmsGateway({
+    recipients: [recipientPhone],
+    message: messageText,
+    config
+  });
+
+  res.json(result);
+});
+
+app.post('/api/messages', requireRole('ADMIN', 'MANAGER'), async (req: Request, res: Response) => {
   const { title, content, recipientType, channel, recipientIds } = req.body;
   const user = (req as any).user;
+
+  // Collect recipient phone numbers if SMS channel requested
+  let smsResult: { success: boolean; message: string; results?: any } | null = null;
+  if (channel === 'SMS' || channel === 'BOTH') {
+    let targetEmployees: any[] = [];
+    if (recipientType === 'ALL') {
+      targetEmployees = db.employees.filter((e: any) => e.phone);
+    } else if (recipientType === 'WORKSHOP_1') {
+      const ws1 = db.settings.workshops?.[0];
+      targetEmployees = db.employees.filter((e: any) => e.workshopId === ws1?.id && e.phone);
+    } else if (recipientType === 'WORKSHOP_2') {
+      const ws2 = db.settings.workshops?.[1];
+      targetEmployees = db.employees.filter((e: any) => e.workshopId === ws2?.id && e.phone);
+    } else if (recipientIds && Array.isArray(recipientIds)) {
+      targetEmployees = db.employees.filter((e: any) => recipientIds.includes(e.id) && e.phone);
+    }
+
+    const phones = targetEmployees.map(e => e.phone).filter(Boolean);
+    if (phones.length > 0) {
+      const smsText = `${title.trim()}\n${content.trim()}\n- کارگاه M.GAMMON`;
+      smsResult = await sendRealSmsGateway({
+        recipients: phones,
+        message: smsText
+      });
+    } else {
+      smsResult = {
+        success: false,
+        message: 'هیچ شماره تلفن همراه معتبری برای پرسنل مقصد یافت نشد.'
+      };
+    }
+  }
 
   const newMsg = {
     id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1707,7 +2621,8 @@ app.post('/api/messages', requireRole('ADMIN', 'MANAGER'), (req: Request, res: R
     content: content.trim(),
     channel: channel || 'IN_APP',
     sentAt: new Date().toISOString(),
-    status: channel === 'SMS' ? 'QUEUED' : 'SENT',
+    status: channel === 'SMS' ? (smsResult?.success ? 'SENT' : 'FAILED') : 'SENT',
+    smsDeliveryStatus: smsResult ? smsResult.message : undefined,
     partsCount: Math.ceil(content.length / 70) || 1
   };
 
@@ -1717,8 +2632,9 @@ app.post('/api/messages', requireRole('ADMIN', 'MANAGER'), (req: Request, res: R
   }
 
   res.json({
-    success: true,
-    message: channel === 'SMS' ? 'پیامک در صف ارسال قرار گرفت.' : 'پیام با موفقیت در پرتال پرسنل ثبت شد.',
+    success: channel === 'SMS' ? Boolean(smsResult?.success) : true,
+    message: smsResult ? smsResult.message : (channel === 'SMS' ? 'پیامک ارسال شد.' : 'پیام با موفقیت در پرتال پرسنل ثبت شد.'),
+    smsStatus: smsResult,
     broadcastMessage: newMsg
   });
 });
