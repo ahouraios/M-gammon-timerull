@@ -67,8 +67,10 @@ export const LeavesView: React.FC<LeavesViewProps> = ({
   };
 
   const filteredLeaves = leaves.filter((l) => {
-    if (currentUser.role === 'EMPLOYEE' && currentUser.employeeId && l.employeeId !== currentUser.employeeId) {
-      return false;
+    if (currentUser.role === 'EMPLOYEE') {
+      if (!currentUser.employeeId || l.employeeId !== currentUser.employeeId) {
+        return false;
+      }
     }
     if (statusFilter !== 'ALL' && l.status !== statusFilter) return false;
     return true;

@@ -26,7 +26,7 @@ import {
   initialBonusesPenalties,
   initialBroadcastMessages
 } from '../data/initialData';
-import { getCurrentTimeStr, getTodayShamsi, calculateGpsDistanceMeters, formatCurrencyTomans } from '../utils/dateUtils';
+import { getCurrentTimeStr, getTodayShamsi, calculateGpsDistanceMeters, formatCurrencyTomans, getDatesBetweenShamsi } from '../utils/dateUtils';
 
 const STORAGE_KEYS = {
   SETTINGS: 'mgommon_company_settings_v4',
@@ -42,7 +42,20 @@ const STORAGE_KEYS = {
   MESSAGES: 'mgommon_messages_v4',
   CURRENT_USER: 'mgommon_current_user_v4',
   AUTH_TOKEN: 'mgommon_auth_token_v4',
+  REMEMBERED_USER: 'mgommon_remembered_user_v4',
+  REMEMBER_ME: 'mgommon_remember_me_v4',
 };
+
+export interface RememberedUser {
+  id: string;
+  name: string;
+  username: string;
+  avatarUrl?: string;
+  employeeId?: string;
+  personalCode?: string;
+  phone?: string;
+  lastLogin: string;
+}
 
 // Safe retrieval with quota/error handling
 function getItem<T>(key: string, fallback: T): T {
@@ -178,24 +191,269 @@ export class StorageService {
   }
 
   // Async server authentication
-  static async authenticateAsync(loginId: string, pass: string): Promise<{ success: boolean; user?: User; message?: string }> {
+  static async authenticateAsync(
+    loginId: string,
+    pass: string,
+    rememberMe: boolean = false
+  ): Promise<{ success: boolean; user?: User; message?: string }> {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loginId, password: pass })
+        body: JSON.stringify({ loginId, password: pass, rememberMe })
       });
       const data = await res.json();
       if (data.success && data.user) {
         if (data.token) {
           localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, data.token);
         }
+        if (rememberMe) {
+          localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, 'true');
+        } else {
+          localStorage.removeItem(STORAGE_KEYS.REMEMBER_ME);
+        }
+
+        // Cache remembered user profile summary for convenient daily quick login
+        this.saveRememberedUser({
+          id: data.user.id,
+          name: data.user.name,
+          username: data.user.username,
+          avatarUrl: data.user.avatarUrl,
+          employeeId: data.user.employeeId,
+          phone: data.user.phone,
+          lastLogin: new Date().toISOString()
+        });
+
         this.setCurrentUser(data.user);
         return { success: true, user: data.user };
       }
       return { success: false, message: data.message || 'خطا در احراز هویت' };
     } catch {
-      return this.authenticate(loginId, pass);
+      const fallback = this.authenticate(loginId, pass);
+      if (fallback.success && fallback.user) {
+        this.saveRememberedUser({
+          id: fallback.user.id,
+          name: fallback.user.name,
+          username: fallback.user.username,
+          avatarUrl: fallback.user.avatarUrl,
+          employeeId: fallback.user.employeeId,
+          phone: fallback.user.phone,
+          lastLogin: new Date().toISOString()
+        });
+      }
+      return fallback;
+    }
+  }
+
+  // Check if WebAuthn / Platform Authenticator (Fingerprint/Biometric) is available on device
+  static async isBiometricAvailable(): Promise<boolean> {
+    if (typeof window === 'undefined') return false;
+    if (!window.PublicKeyCredential) return false;
+    if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== 'function') {
+      return false;
+    }
+    try {
+      return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    } catch {
+      return false;
+    }
+  }
+
+  // Get cached user profile for daily quick-login
+  static getRememberedUser(): RememberedUser | null {
+    return getItem<RememberedUser | null>(STORAGE_KEYS.REMEMBERED_USER, null);
+  }
+
+  static saveRememberedUser(user: RememberedUser): void {
+    setItem(STORAGE_KEYS.REMEMBERED_USER, user);
+  }
+
+  static clearRememberedUser(): void {
+    removeItem(STORAGE_KEYS.REMEMBERED_USER);
+  }
+
+  // Real WebAuthn Biometric Authentication
+  static async authenticateBiometricAsync(
+    loginId?: string,
+    rememberMe: boolean = true
+  ): Promise<{ success: boolean; user?: User; message?: string }> {
+    const isAvail = await this.isBiometricAvailable();
+    if (!isAvail) {
+      return { success: false, message: 'دستگاه شما از حسگر اثر انگشت یا احراز هویت بیومتریک پشتیبانی نمی‌کند.' };
+    }
+
+    try {
+      // 1. Fetch challenge from server
+      const optRes = await fetch('/api/auth/webauthn/login-options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginId })
+      });
+      const optData = await optRes.json();
+      if (!optData.challenge) {
+        return { success: false, message: 'خطا در دریافت چالش امنیتی سرور.' };
+      }
+
+      // Convert challenge base64url to Uint8Array
+      const challengeBytes = Uint8Array.from(
+        atob(optData.challenge.replace(/-/g, '+').replace(/_/g, '/')),
+        (c) => c.charCodeAt(0)
+      );
+
+      const allowCreds = (optData.allowCredentials || []).map((c: any) => ({
+        id: Uint8Array.from(atob(c.id.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0)),
+        type: 'public-key' as const,
+        transports: ['internal']
+      }));
+
+      // 2. Invoke real browser WebAuthn API for Platform Authenticator
+      const credential = (await navigator.credentials.get({
+        publicKey: {
+          challenge: challengeBytes,
+          timeout: 60000,
+          rpId: optData.rpId || window.location.hostname,
+          userVerification: 'preferred',
+          allowCredentials: allowCreds.length > 0 ? allowCreds : undefined
+        }
+      })) as PublicKeyCredential | null;
+
+      if (!credential) {
+        return { success: false, message: 'احراز هویت بیومتریک لغو شد.' };
+      }
+
+      const credentialId = btoa(String.fromCharCode(...new Uint8Array(credential.rawId)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      // 3. Verify credential on server
+      const verifyRes = await fetch('/api/auth/webauthn/login-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          credentialId,
+          challenge: optData.challenge,
+          loginId,
+          rememberMe
+        })
+      });
+
+      const verifyData = await verifyRes.json();
+      if (verifyData.success && verifyData.user) {
+        if (verifyData.token) {
+          localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, verifyData.token);
+        }
+        if (rememberMe) {
+          localStorage.setItem(STORAGE_KEYS.REMEMBER_ME, 'true');
+        }
+        this.saveRememberedUser({
+          id: verifyData.user.id,
+          name: verifyData.user.name,
+          username: verifyData.user.username,
+          avatarUrl: verifyData.user.avatarUrl,
+          employeeId: verifyData.user.employeeId,
+          phone: verifyData.user.phone,
+          lastLogin: new Date().toISOString()
+        });
+        this.setCurrentUser(verifyData.user);
+        return { success: true, user: verifyData.user };
+      }
+
+      return { success: false, message: verifyData.message || 'اعتبارسنجی بیومتریک ناموفق بود.' };
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        return { success: false, message: 'عملیات اثر انگشت لغو گردید یا زمان آن به پایان رسید.' };
+      }
+      return { success: false, message: err.message || 'خطا در اجرای احراز هویت بیومتریک.' };
+    }
+  }
+
+  // Register device biometric credentials for current user
+  static async registerBiometricAsync(): Promise<{ success: boolean; message: string }> {
+    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!token) return { success: false, message: 'ابتدا باید وارد حساب کاربری شوید.' };
+
+    try {
+      const optRes = await fetch('/api/auth/webauthn/register-options', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const opt = await optRes.json();
+      if (!opt.challenge) return { success: false, message: 'خطا در آماده‌سازی چالش ثبت بیومتریک.' };
+
+      const challengeBytes = Uint8Array.from(
+        atob(opt.challenge.replace(/-/g, '+').replace(/_/g, '/')),
+        (c) => c.charCodeAt(0)
+      );
+      const userIdBytes = Uint8Array.from(
+        atob(opt.user.id.replace(/-/g, '+').replace(/_/g, '/')),
+        (c) => c.charCodeAt(0)
+      );
+
+      const cred = (await navigator.credentials.create({
+        publicKey: {
+          challenge: challengeBytes,
+          rp: { name: opt.rp.name, id: opt.rp.id },
+          user: {
+            id: userIdBytes,
+            name: opt.user.name,
+            displayName: opt.user.displayName
+          },
+          pubKeyCredParams: opt.pubKeyCredParams,
+          authenticatorSelection: opt.authenticatorSelection,
+          timeout: opt.timeout,
+          attestation: opt.attestation
+        }
+      })) as PublicKeyCredential | null;
+
+      if (!cred) return { success: false, message: 'ثبت بیومتریک لغو شد.' };
+
+      const credentialId = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      const verifyRes = await fetch('/api/auth/webauthn/register-verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          credentialId,
+          challenge: opt.challenge
+        })
+      });
+
+      const verifyData = await verifyRes.json();
+      return { success: verifyData.success, message: verifyData.message || 'اثر انگشت با موفقیت ثبت شد.' };
+    } catch (e: any) {
+      return { success: false, message: e.message || 'خطا در ثبت حسگر بیومتریک.' };
+    }
+  }
+
+  // Validate session on launch
+  static async validateSessionAsync(): Promise<User | null> {
+    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!token) return null;
+
+    try {
+      const res = await fetch('/api/auth/verify-session', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        this.setCurrentUser(data.user);
+        return data.user;
+      } else {
+        this.logout();
+        return null;
+      }
+    } catch {
+      return this.getCurrentUser();
     }
   }
 
@@ -571,6 +829,25 @@ export class StorageService {
       return { success: false, message: 'ورود امروز شما ثبت نشده است.' };
     }
 
+    const settings = this.getSettings();
+    let verifiedLocation = existing.verifiedLocation;
+    if (gpsCoords) {
+      if (!Number.isFinite(gpsCoords.lat) || !Number.isFinite(gpsCoords.lng)) {
+        return { success: false, message: 'مختصات موقعیت مکانی نامعتبر است.' };
+      }
+      const assignedWs = settings.workshops?.find(w => w.id === emp.workshopId) || settings.workshops?.[0];
+      const targetWs = assignedWs || { lat: settings.officeLat, lng: settings.officeLng, allowedRadiusMeters: 35, name: 'کارگاه' };
+      const dist = calculateGpsDistanceMeters(gpsCoords.lat, gpsCoords.lng, targetWs.lat, targetWs.lng);
+      const allowedRadius = targetWs.allowedRadiusMeters || 35;
+      if (dist > allowedRadius) {
+        return {
+          success: false,
+          message: `فاصله شما از کارگاه اختصاص‌یافته (${targetWs.name}) ${dist} متر است. سقف مجاز ${allowedRadius} متر است.`
+        };
+      }
+      verifiedLocation = { lat: gpsCoords.lat, lng: gpsCoords.lng, distanceMeters: dist };
+    }
+
     const shift = this.getShifts().find(s => s.id === emp.shiftId) || this.getShifts()[0];
 
     const [inH, inM] = existing.checkInTime.split(':').map(Number);
@@ -625,6 +902,7 @@ export class StorageService {
       status: finalStatus,
       checkOutMethod: method,
       approvalStatus: 'APPROVED',
+      verifiedLocation,
     };
 
     const updatedList = records.map(r => r.id === existing.id ? updatedRecord : r);
@@ -842,26 +1120,37 @@ export class StorageService {
         this.saveEmployees(rawEmps);
       }
 
-      // Materialize attendance for full-day leaves (Fixes HR-004 & HR-005)
+      // Materialize attendance for full-day leaves on their actual scheduled dates (Fixes HR-004 & HR-005)
       if (target.type !== 'HOURLY') {
+        const leaveDates = getDatesBetweenShamsi(target.startDate, target.endDate || target.startDate);
         const rawAtt = this.getAllAttendanceRaw();
-        const existingAtt = rawAtt.find(a => a.employeeId === target.employeeId && a.date === today);
-        if (existingAtt) {
-          this.saveAttendance(rawAtt.map(a => a.id === existingAtt.id ? { ...a, status: 'ON_LEAVE', notes: 'مرخصی تایید شده' } : a));
-        } else {
-          this.saveAttendance([{
-            id: `att_lve_${Date.now()}`,
-            companyId: target.companyId,
-            employeeId: target.employeeId,
-            date: today,
-            workDurationMinutes: 0,
-            lateMinutes: 0,
-            earlyExitMinutes: 0,
-            overtimeMinutes: 0,
-            status: 'ON_LEAVE',
-            notes: 'مرخصی تایید شده'
-          }, ...rawAtt]);
-        }
+        const updatedAtt = [...rawAtt];
+
+        leaveDates.forEach(dateStr => {
+          const existingIdx = updatedAtt.findIndex(a => a.employeeId === target.employeeId && a.date === dateStr);
+          if (existingIdx >= 0) {
+            updatedAtt[existingIdx] = {
+              ...updatedAtt[existingIdx],
+              status: 'ON_LEAVE',
+              notes: `مرخصی تایید شده (${target.type})`
+            };
+          } else {
+            updatedAtt.unshift({
+              id: `att_lve_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+              companyId: target.companyId || 'comp_mgommon_01',
+              employeeId: target.employeeId,
+              date: dateStr,
+              workDurationMinutes: 0,
+              lateMinutes: 0,
+              earlyExitMinutes: 0,
+              overtimeMinutes: 0,
+              status: 'ON_LEAVE',
+              notes: `مرخصی تایید شده (${target.type})`
+            });
+          }
+        });
+
+        this.saveAttendance(updatedAtt);
       }
     }
   }
@@ -870,15 +1159,26 @@ export class StorageService {
     const rawLeaves = this.getAllLeaveRequestsRaw();
     const target = rawLeaves.find(l => l.id === id);
 
-    // Restore leave balance if deleted while approved (Fixes HR-007)
-    if (target && target.status === 'APPROVED' && target.type === 'EARNED' && target.durationDays) {
-      const rawEmps = this.getAllEmployeesRaw().map(e => {
-        if (e.id === target.employeeId) {
-          return { ...e, remainingLeaveDays: e.remainingLeaveDays + target.durationDays! };
-        }
-        return e;
-      });
-      this.saveEmployees(rawEmps);
+    // Restore leave balance and remove generated on-leave attendance if deleted while approved (Fixes HR-007)
+    if (target && target.status === 'APPROVED') {
+      if (target.type === 'EARNED' && target.durationDays) {
+        const rawEmps = this.getAllEmployeesRaw().map(e => {
+          if (e.id === target.employeeId) {
+            return { ...e, remainingLeaveDays: e.remainingLeaveDays + target.durationDays! };
+          }
+          return e;
+        });
+        this.saveEmployees(rawEmps);
+      }
+
+      if (target.type !== 'HOURLY') {
+        const dates = getDatesBetweenShamsi(target.startDate, target.endDate || target.startDate);
+        const rawAtt = this.getAllAttendanceRaw();
+        const cleanedAtt = rawAtt.filter(
+          a => !(a.employeeId === target.employeeId && dates.includes(a.date) && a.status === 'ON_LEAVE' && (a.notes?.includes('مرخصی تایید شده') || a.id.startsWith('att_lve_')))
+        );
+        this.saveAttendance(cleanedAtt);
+      }
     }
 
     this.saveLeaveRequests(rawLeaves.filter(l => l.id !== id));
@@ -1069,7 +1369,7 @@ export class StorageService {
       }
     });
 
-    if (workedDaysCount === 0) {
+    if (monthlyAtt.length === 0) {
       workedDaysCount = settings.workDaysPerMonth || 22;
       totalWorkedMinutes = workedDaysCount * (settings.dailyWorkHours || 8) * 60;
     }
@@ -1091,16 +1391,18 @@ export class StorageService {
     const overtimeMultiplier = settings.overtimeRateMultiplier || emp.overtimeRate || 1.4;
     const overtimeAmount = Math.round((totalOvertimeMins / 60) * effectiveHourlyRate * overtimeMultiplier);
 
+    const normMonth = month.replace(/-/g, '/');
+
     const approvedAdvances = advances
-      .filter(a => a.employeeId === employeeId && a.status === 'APPROVED' && a.repayMonth === month)
+      .filter(a => a.employeeId === employeeId && a.status === 'APPROVED' && (a.repayMonth?.replace(/-/g, '/') === normMonth))
       .reduce((sum, a) => sum + a.amount, 0);
 
     const bonuses = bonusesPenalties
-      .filter(b => b.employeeId === employeeId && b.type === 'BONUS' && b.month === month)
+      .filter(b => b.employeeId === employeeId && b.type === 'BONUS' && (b.month?.replace(/-/g, '/') === normMonth))
       .reduce((sum, b) => sum + b.amount, 0);
 
     const disciplinaryPenalties = bonusesPenalties
-      .filter(b => b.employeeId === employeeId && b.type === 'PENALTY' && b.month === month)
+      .filter(b => b.employeeId === employeeId && b.type === 'PENALTY' && (b.month?.replace(/-/g, '/') === normMonth))
       .reduce((sum, b) => sum + b.amount, 0);
 
     const penalties = disciplinaryPenalties + absentDeduction;

@@ -58,10 +58,11 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   onNavigate,
 }) => {
   const shamsi = getTodayShamsiDetailed();
+  const isEmployeeRole = currentUser.role === 'EMPLOYEE';
   const currentEmployee =
     employees.find((e) => e.id === currentUser.employeeId) ||
     employees.find((e) => e.email === currentUser.email) ||
-    employees[2];
+    (!isEmployeeRole && employees.length > 0 ? employees[0] : undefined);
 
   const todayRecord = attendance.find(
     (a) => a.employeeId === currentEmployee?.id && a.date === shamsi.dateString
@@ -182,6 +183,28 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
       (m.recipientType === 'WORKSHOP_2' && currentEmployee?.workshopId === 'ws_2') ||
       (m.recipientIds && currentEmployee && m.recipientIds.includes(currentEmployee.id))
   );
+
+  if (!currentEmployee) {
+    return (
+      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-xs text-center space-y-4">
+        <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+          <ShieldAlert className="w-8 h-8" />
+        </div>
+        <h3 className="font-bold text-slate-800 text-base">پرونده پرسنلی مرتبط یافت نشد</h3>
+        <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+          حساب کاربری فعلی شما ({currentUser.name}) به هیچ پرونده پرسنلی متصل نیست. برای مشاهده پرتال پرسنلی یا ثبت تردد پرسنل، می‌توانید از بخش مدیریت پرسنل یک کارگر ثبت نمایید یا با حساب کاربری پرسنل وارد شوید.
+        </p>
+        {onNavigate && (
+          <button
+            onClick={() => onNavigate('employees')}
+            className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-xl hover:bg-slate-800 cursor-pointer shadow-xs"
+          >
+            مشاهده مدیریت پرسنل
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 w-full max-w-full">

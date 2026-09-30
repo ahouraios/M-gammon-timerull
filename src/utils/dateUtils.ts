@@ -103,6 +103,46 @@ export function getTodayShamsi(): string {
   return `${jy}/${mm}/${dd}`;
 }
 
+/**
+ * Returns array of Shamsi date strings (YYYY/MM/DD) between startDate and endDate inclusive
+ */
+export function getDatesBetweenShamsi(startDate: string, endDate: string): string[] {
+  if (!startDate) return [];
+  if (!endDate || startDate === endDate) return [startDate];
+
+  const parseShamsi = (s: string): [number, number, number] => {
+    const parts = s.split(/[/ -]/).map(Number);
+    return [parts[0] || 1405, parts[1] || 1, parts[2] || 1];
+  };
+
+  try {
+    const [sy, sm, sd] = parseShamsi(startDate);
+    const [ey, em, ed] = parseShamsi(endDate);
+    const [sgy, sgm, sgd] = jalaliToGregorian(sy, sm, sd);
+    const [egy, egm, egd] = jalaliToGregorian(ey, em, ed);
+
+    const start = new Date(sgy, sgm - 1, sgd);
+    const end = new Date(egy, egm - 1, egd);
+
+    if (start > end) return [startDate];
+
+    const result: string[] = [];
+    const cur = new Date(start);
+    let count = 0;
+    while (cur <= end && count < 60) {
+      const [jy, jm, jd] = gregorianToJalali(cur.getFullYear(), cur.getMonth() + 1, cur.getDate());
+      const mm = jm < 10 ? `0${jm}` : `${jm}`;
+      const dd = jd < 10 ? `0${jd}` : `${jd}`;
+      result.push(`${jy}/${mm}/${dd}`);
+      cur.setDate(cur.getDate() + 1);
+      count++;
+    }
+    return result.length > 0 ? result : [startDate];
+  } catch {
+    return [startDate];
+  }
+}
+
 export function getTodayShamsiDetailed(): {
   dateString: string;
   dayOfWeek: string;

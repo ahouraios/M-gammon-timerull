@@ -283,6 +283,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
             </div>
 
+            {/* Direct Logo URL from external host */}
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                آدرس اینترنتی لوگو (URL مستقیم روی هاست شخصی یا سرور)
+              </label>
+              <input
+                type="url"
+                dir="ltr"
+                disabled={!canEdit}
+                value={formData.logoUrl || ''}
+                onChange={(e) => setFormData({ ...formData, logoUrl: e.target.value })}
+                placeholder="https://yourdomain.ir/assets/logo.png"
+                className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                می‌توانید تصویر لوگو را روی هاست قرار داده و آدرس مستقیم آن را اینجا وارد کنید تا در صفحه لاگین و هدر نمایش داده شود.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">

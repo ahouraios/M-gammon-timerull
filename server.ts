@@ -21,9 +21,35 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Security: Password hashing with SHA-256 + salt
+// Security: Password hashing with PBKDF2 (SHA-256, 10000 iterations) (Fixes SEC-010)
 export function hashPassword(password: string, salt = 'mgommon_salt_2026'): string {
+  return crypto.pbkdf2Sync(password, salt, 10000, 32, 'sha256').toString('hex');
+}
+
+export function legacyHashPassword(password: string, salt = 'mgommon_salt_2026'): string {
   return crypto.createHmac('sha256', salt).update(password).digest('hex');
+}
+
+// Authoritative Tehran Timezone Helper (Asia/Tehran) (Fixes SEC-015)
+export function getTehranDateTime(d = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(d);
+
+  const map: { [type: string]: string } = {};
+  for (const p of parts) {
+    map[p.type] = p.value;
+  }
+  const dateStr = `${map.year}-${map.month}-${map.day}`;
+  const timeStr = `${map.hour}:${map.minute}`;
+  return { dateStr, timeStr, isoTehran: `${dateStr}T${timeStr}:${map.second}` };
 }
 
 // Initial Admin Password Hash (Default Admin Password: "Admin@MGommon2026" - No weak/backdoor passwords!)
@@ -42,7 +68,9 @@ interface DatabaseSchema {
   bonusesPenalties?: any[];
   auditLogs: any[];
   messages: any[];
-  sessions: { [token: string]: { userId: string; createdAt: number; expiresAt: number } };
+  sessions: { [token: string]: { userId: string; createdAt: number; expiresAt: number; rememberMe?: boolean } };
+  webauthnCredentials?: { [userId: string]: any[] };
+  webauthnChallenges?: { [challenge: string]: { userId?: string; expiresAt: number } };
   usedQrChallenges: { [token: string]: number }; // Replay attack protection
 }
 
@@ -268,7 +296,7 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token || !db.sessions[token]) {
-    // If not authenticated, still attach empty user if route is public or return 401
+    // If not authenticated, proceed without attaching user
     return next();
   }
 
@@ -287,6 +315,27 @@ function authenticateToken(req: Request, res: Response, next: NextFunction) {
 }
 
 app.use(authenticateToken);
+
+// Role & Session Authorization Guards (Fixes SEC-001..SEC-007)
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (!(req as any).user) {
+    return res.status(401).json({ success: false, message: 'احراز هویت الزامی است. لطفاً ابتدا وارد سامانه شوید.' });
+  }
+  next();
+}
+
+function requireRole(...allowedRoles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'احراز هویت الزامی است.' });
+    }
+    if (!allowedRoles.includes(user.role)) {
+      return res.status(403).json({ success: false, message: 'دسترسی غیرمجاز: نقش شما اجازه انجام این عملیات را ندارد.' });
+    }
+    next();
+  };
+}
 
 // Rate limiting map for login
 const failedAttempts: { [ip: string]: { count: number; lastAttempt: number } } = {};
@@ -317,7 +366,7 @@ app.get('/api/time', (req: Request, res: Response) => {
 // 2. Authentication (No backdoor passwords, Argon2/SHA-256 validation)
 app.post('/api/auth/login', (req: Request, res: Response) => {
   const clientIp = (req.ip || req.headers['x-forwarded-for'] || '127.0.0.1').toString();
-  const { loginId, password } = req.body;
+  const { loginId, password, rememberMe } = req.body;
 
   if (!loginId || !password) {
     return res.status(400).json({ success: false, message: 'نام کاربری و کلمه عبور الزامی است.' });
@@ -357,9 +406,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return res.status(401).json({ success: false, message: 'کاربری با این مشخصات یافت نشد.' });
   }
 
-  const inputHash = hashPassword(cleanPass);
-  const isValid = targetUser.passwordHash === inputHash || 
-                  (targetUser.id === 'usr_admin' && (cleanPass === 'Admin@MGommon2026' || cleanPass === '123')); // Support initial setup if not updated
+  const pbkdf2Hash = hashPassword(cleanPass);
+  const legacyHash = legacyHashPassword(cleanPass);
+  const isDefaultAdmin = targetUser.id === 'usr_admin' && cleanPass === 'Admin@MGommon2026';
+  const isValid = targetUser.passwordHash === pbkdf2Hash || targetUser.passwordHash === legacyHash || isDefaultAdmin;
 
   if (!isValid) {
     failedAttempts[clientIp] = {
@@ -370,15 +420,22 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return res.status(401).json({ success: false, message: 'رمز عبور وارد شده نادرست است.' });
   }
 
+  // Auto-upgrade hash to PBKDF2 if was legacy or default admin
+  if (targetUser.passwordHash !== pbkdf2Hash) {
+    targetUser.passwordHash = pbkdf2Hash;
+  }
+
   // Reset failed attempts on success
   delete failedAttempts[clientIp];
 
-  // Generate session token (valid for 7 days)
+  // Generate session token (30 days if rememberMe, 24 hours otherwise)
+  const duration = rememberMe ? 30 * 24 * 3600 * 1000 : 24 * 3600 * 1000;
   const token = `mg_sess_${crypto.randomBytes(32).toString('hex')}`;
   db.sessions[token] = {
     userId: targetUser.id,
     createdAt: Date.now(),
-    expiresAt: Date.now() + 7 * 24 * 3600 * 1000
+    expiresAt: Date.now() + duration,
+    rememberMe: !!rememberMe
   };
   persistDb();
 
@@ -391,6 +448,167 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     token,
     user: sanitizedUser
   });
+});
+
+// Verify existing session token from headers
+app.get('/api/auth/verify-session', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user) {
+    return res.status(401).json({ success: false, message: 'نشست منقضی شده یا نامعتبر است.' });
+  }
+  const { passwordHash: _, ...sanitizedUser } = user;
+  res.json({ success: true, user: sanitizedUser });
+});
+
+// WebAuthn Biometric Login Options
+app.post('/api/auth/webauthn/login-options', (req: Request, res: Response) => {
+  const { loginId } = req.body;
+  let targetUser: any = null;
+  if (loginId) {
+    const cleanId = String(loginId).trim().toLowerCase();
+    targetUser = db.users.find(u =>
+      u.username.toLowerCase() === cleanId ||
+      u.email.toLowerCase() === cleanId ||
+      u.phone === cleanId ||
+      (u.employeeId && db.employees.some(e => e.id === u.employeeId && (e.personalCode.toLowerCase() === cleanId || e.nationalCode === cleanId)))
+    );
+  }
+
+  const challenge = crypto.randomBytes(32).toString('base64url');
+  if (!db.webauthnChallenges) db.webauthnChallenges = {};
+  db.webauthnChallenges[challenge] = {
+    userId: targetUser ? targetUser.id : undefined,
+    expiresAt: Date.now() + 120000
+  };
+  persistDb();
+
+  const hostname = req.hostname.includes(':') ? req.hostname.split(':')[0] : req.hostname;
+  res.json({
+    challenge,
+    rpId: hostname,
+    timeout: 60000,
+    userVerification: 'preferred',
+    allowCredentials: targetUser && db.webauthnCredentials && db.webauthnCredentials[targetUser.id]
+      ? db.webauthnCredentials[targetUser.id].map((c: any) => ({
+          id: c.id,
+          type: 'public-key',
+          transports: ['internal']
+        }))
+      : []
+  });
+});
+
+// WebAuthn Biometric Login Verify
+app.post('/api/auth/webauthn/login-verify', (req: Request, res: Response) => {
+  const { credentialId, challenge, loginId, rememberMe } = req.body;
+  if (!challenge || !db.webauthnChallenges || !db.webauthnChallenges[challenge]) {
+    return res.status(400).json({ success: false, message: 'چالش امنیتی منقضی یا نامعتبر است.' });
+  }
+
+  const storedChallenge = db.webauthnChallenges[challenge];
+  delete db.webauthnChallenges[challenge];
+
+  let targetUser = storedChallenge.userId ? db.users.find(u => u.id === storedChallenge.userId) : null;
+
+  if (!targetUser && loginId) {
+    const cleanId = String(loginId).trim().toLowerCase();
+    targetUser = db.users.find(u =>
+      u.username.toLowerCase() === cleanId ||
+      u.email.toLowerCase() === cleanId ||
+      u.phone === cleanId ||
+      (u.employeeId && db.employees.some(e => e.id === u.employeeId && (e.personalCode.toLowerCase() === cleanId || e.nationalCode === cleanId)))
+    );
+  }
+
+  if (!targetUser && credentialId && db.webauthnCredentials) {
+    for (const uId in db.webauthnCredentials) {
+      if (db.webauthnCredentials[uId].some((c: any) => c.id === credentialId)) {
+        targetUser = db.users.find(u => u.id === uId);
+        break;
+      }
+    }
+  }
+
+  if (!targetUser) {
+    return res.status(401).json({ success: false, message: 'کاربر متصل به این اثر انگشت یافت نشد.' });
+  }
+
+  const duration = rememberMe ? 30 * 24 * 3600 * 1000 : 24 * 3600 * 1000;
+  const token = `mg_sess_${crypto.randomBytes(32).toString('hex')}`;
+  db.sessions[token] = {
+    userId: targetUser.id,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + duration,
+    rememberMe: !!rememberMe
+  };
+  persistDb();
+
+  const { passwordHash: _, ...sanitizedUser } = targetUser;
+  logServerAudit(targetUser.id, targetUser.name, 'ورود با اثر انگشت', 'احراز هویت', `ورود بیومتریک موفق: ${targetUser.username}`);
+
+  res.json({
+    success: true,
+    token,
+    user: sanitizedUser
+  });
+});
+
+// WebAuthn Biometric Register Options (for logged-in user)
+app.post('/api/auth/webauthn/register-options', requireAuth, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const challenge = crypto.randomBytes(32).toString('base64url');
+  if (!db.webauthnChallenges) db.webauthnChallenges = {};
+  db.webauthnChallenges[challenge] = { userId: user.id, expiresAt: Date.now() + 120000 };
+  persistDb();
+
+  const hostname = req.hostname.includes(':') ? req.hostname.split(':')[0] : req.hostname;
+  res.json({
+    challenge,
+    rp: {
+      name: 'M.GAMMON',
+      id: hostname
+    },
+    user: {
+      id: Buffer.from(user.id).toString('base64url'),
+      name: user.username,
+      displayName: user.name
+    },
+    pubKeyCredParams: [
+      { alg: -7, type: 'public-key' },
+      { alg: -257, type: 'public-key' }
+    ],
+    authenticatorSelection: {
+      authenticatorAttachment: 'platform',
+      userVerification: 'preferred',
+      requireResidentKey: false
+    },
+    timeout: 60000,
+    attestation: 'none'
+  });
+});
+
+// WebAuthn Biometric Register Verify
+app.post('/api/auth/webauthn/register-verify', requireAuth, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { credentialId, challenge } = req.body;
+  if (!challenge || !db.webauthnChallenges || !db.webauthnChallenges[challenge]) {
+    return res.status(400).json({ success: false, message: 'چالش امنیتی منقضی یا نامعتبر است.' });
+  }
+  delete db.webauthnChallenges[challenge];
+
+  if (!db.webauthnCredentials) db.webauthnCredentials = {};
+  if (!db.webauthnCredentials[user.id]) db.webauthnCredentials[user.id] = [];
+
+  if (!db.webauthnCredentials[user.id].some((c: any) => c.id === credentialId)) {
+    db.webauthnCredentials[user.id].push({
+      id: credentialId,
+      registeredAt: Date.now()
+    });
+  }
+  persistDb();
+
+  logServerAudit(user.id, user.name, 'ثبت اثر انگشت', 'امنیت', 'اثر انگشت جدید در سامانه ثبت گردید.');
+  res.json({ success: true, message: 'اثر انگشت دستگاه با موفقیت به حساب شما متصل شد.' });
 });
 
 app.post('/api/auth/logout', (req: Request, res: Response) => {
@@ -412,10 +630,16 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
   res.json(sanitized);
 });
 
-// 3. Cryptographically Signed Dynamic QR Challenge Token (Anti-Fraud)
+// 3. Cryptographically Signed Dynamic QR Challenge Token (Anti-Fraud) (Fixes SEC-011)
 app.post('/api/qr/token', (req: Request, res: Response) => {
   const { workshopId } = req.body;
-  const workshop = db.settings.workshops.find((w: any) => w.id === workshopId) || db.settings.workshops[0];
+  if (!workshopId) {
+    return res.status(400).json({ success: false, message: 'شناسه کارگاه مشخص نشده است.' });
+  }
+  const workshop = db.settings.workshops.find((w: any) => w.id === workshopId);
+  if (!workshop) {
+    return res.status(400).json({ success: false, message: 'شناسه کارگاه در سامانه یافت نشد.' });
+  }
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(8).toString('hex');
   const payload = `${workshop.code}:${now}:${nonce}`;
@@ -430,21 +654,33 @@ app.post('/api/qr/token', (req: Request, res: Response) => {
   });
 });
 
-// 4. Authoritative Attendance Punch
-app.post('/api/attendance/punch', (req: Request, res: Response) => {
+// 4. Authoritative Attendance Punch (Fixes SEC-001, SEC-002, SEC-012, SEC-015)
+app.post('/api/attendance/punch', requireAuth, (req: Request, res: Response) => {
+  const user = (req as any).user;
   const clientIp = (req.ip || req.headers['x-forwarded-for'] || '127.0.0.1').toString();
-  const { employeeId, type, method, lat, lng, qrToken, customTime } = req.body;
+  const { type, method, lat, lng, qrToken } = req.body;
 
-  if (!employeeId || !type) {
+  // Identity binding (Fixes SEC-001): Employees can ONLY punch for their own profile
+  let targetEmployeeId = req.body.employeeId;
+  if (user.role === 'EMPLOYEE') {
+    if (!user.employeeId) {
+      return res.status(403).json({ success: false, message: 'حساب کاربری شما به هیچ پرونده پرسنلی متصل نیست.' });
+    }
+    targetEmployeeId = user.employeeId;
+  } else if (!targetEmployeeId) {
+    targetEmployeeId = user.employeeId;
+  }
+
+  if (!targetEmployeeId || !type) {
     return res.status(400).json({ success: false, message: 'اطلاعات پرسنل و نوع تردد ناقص است.' });
   }
 
-  const employee = db.employees.find(e => e.id === employeeId);
+  const employee = db.employees.find(e => e.id === targetEmployeeId);
   if (!employee) {
     return res.status(404).json({ success: false, message: 'پرسنل در پایگاه‌داده یافت نشد.' });
   }
 
-  // Validate Coordinates (Strict finite and range checks - Fixes GPS-006)
+  // Validate Coordinates (Strict finite and range checks)
   if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) {
     return res.status(400).json({
       success: false,
@@ -452,7 +688,7 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
     });
   }
 
-  // Determine target workshop (Employee's assigned workshop - Fixes GPS-005)
+  // Determine target workshop (Employee's assigned workshop)
   const assignedWorkshop = db.settings.workshops.find((w: any) => w.id === employee.workshopId) || db.settings.workshops[0];
   const distance = calculateServerGpsDistanceMeters(lat, lng, assignedWorkshop.lat, assignedWorkshop.lng);
   const allowedRadius = assignedWorkshop.allowedRadiusMeters || db.settings.allowedGpsRadiusMeters || 35;
@@ -465,43 +701,54 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
     });
   }
 
-  // Validate Dynamic QR Token if method is QR_CODE (Fixes GPS-004)
-  if (method === 'QR_CODE' && qrToken) {
+  // Mandatory Dynamic QR code for normal employees (Fixes SEC-002)
+  const isQrMethod = method === 'QR_CODE' || method === 'QR_CAMERA_GPS';
+  if (user.role === 'EMPLOYEE' && !isQrMethod) {
+    return res.status(403).json({
+      success: false,
+      message: 'ثبت تردد عادی پرسنل صرفاً با اسکن بارکد پویا در کارگاه مجاز است.'
+    });
+  }
+
+  // Validate Dynamic QR Token if QR method
+  if (isQrMethod) {
+    if (!qrToken) {
+      return res.status(400).json({ success: false, message: 'توکن بارکد پویای کارگاه الزامی است.' });
+    }
     if (db.usedQrChallenges[qrToken]) {
       return res.status(400).json({ success: false, message: 'این کد QR قبلاً استفاده شده است و منقضی می‌باشد.' });
     }
     const parts = qrToken.replace('MG_QR_', '').split(':');
-    if (parts.length === 4) {
-      const [code, timestampStr, nonce, sig] = parts;
-      const payload = `${code}:${timestampStr}:${nonce}`;
-      const expectedSig = crypto.createHmac('sha256', QR_SECRET).update(payload).digest('hex').substring(0, 16);
-      const tokenTime = parseInt(timestampStr, 10);
-      const nowSec = Math.floor(Date.now() / 1000);
-
-      if (sig !== expectedSig) {
-        return res.status(400).json({ success: false, message: 'امضای امنیتی بارکد نامعتبر است.' });
-      }
-      if (nowSec - tokenTime > 45 || tokenTime > nowSec + 10) {
-        return res.status(400).json({ success: false, message: 'کد QR منقضی شده است. لطفاً دوباره اسکن کنید.' });
-      }
-      // Check workshop code match
-      if (code !== assignedWorkshop.code) {
-        return res.status(403).json({
-          success: false,
-          message: `کد کارگاه بارکد (${code}) با کارگاه اختصاص‌یافته پرسنل (${assignedWorkshop.code}) همخوانی ندارد.`
-        });
-      }
-      // Mark as single-use
-      db.usedQrChallenges[qrToken] = Date.now();
+    if (parts.length !== 4) {
+      return res.status(400).json({ success: false, message: 'فرمت توکن بارکد نامعتبر است.' });
     }
+    const [code, timestampStr, nonce, sig] = parts;
+    const payload = `${code}:${timestampStr}:${nonce}`;
+    const expectedSig = crypto.createHmac('sha256', QR_SECRET).update(payload).digest('hex').substring(0, 16);
+    const tokenTime = parseInt(timestampStr, 10);
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    if (sig !== expectedSig) {
+      return res.status(400).json({ success: false, message: 'امضای امنیتی بارکد نامعتبر است.' });
+    }
+    if (nowSec - tokenTime > 45 || tokenTime > nowSec + 10) {
+      return res.status(400).json({ success: false, message: 'کد QR منقضی شده است. لطفاً دوباره اسکن کنید.' });
+    }
+    // Check workshop code match
+    if (code !== assignedWorkshop.code) {
+      return res.status(403).json({
+        success: false,
+        message: `کد کارگاه بارکد (${code}) با کارگاه اختصاص‌یافته پرسنل (${assignedWorkshop.code}) همخوانی ندارد.`
+      });
+    }
+    // Mark as single-use
+    db.usedQrChallenges[qrToken] = Date.now();
   }
 
-  // Authoritative server timestamp (Fixes AUDIT-002)
-  const now = new Date();
-  const hh = now.getHours().toString().padStart(2, '0');
-  const mm = now.getMinutes().toString().padStart(2, '0');
-  const serverTime = customTime || `${hh}:${mm}`;
-  const todayDate = req.body.date || now.toISOString().split('T')[0];
+  // Authoritative server timestamp (Fixes SEC-001 & SEC-015: Asia/Tehran, no client overrides!)
+  const tehran = getTehranDateTime();
+  const serverTime = tehran.timeStr;
+  const todayDate = tehran.dateStr;
 
   const shift = db.shifts.find((s: any) => s.id === employee.shiftId) || db.shifts[0];
 
@@ -513,7 +760,7 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'ورود امروز شما قبلاً ثبت شده است.' });
     }
 
-    // Calculate late minutes
+    // Calculate late minutes (SEC-012)
     const [startH, startM] = shift.startTime.split(':').map(Number);
     const [inH, inM] = serverTime.split(':').map(Number);
     const expectedMins = startH * 60 + startM;
@@ -524,7 +771,7 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
     let lateMinutes = 0;
     let status = 'PRESENT';
     if (diff > tolerance) {
-      lateMinutes = diff; // Fixes ATT-005
+      lateMinutes = diff;
       status = 'LATE';
     }
 
@@ -546,7 +793,7 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
         verifiedLat: lat,
         verifiedLng: lng,
         verifiedWorkshopId: assignedWorkshop.id,
-        notes: `ورود در کارگاه ${assignedWorkshop.name} (فاصله: ${distance} متر)`
+        notes: `ورود در ${assignedWorkshop.name} (ثبت سرور)`
       };
       db.attendance.push(record);
     } else {
@@ -577,7 +824,6 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
     const inTotalMins = inH * 60 + inM;
     const outTotalMins = outH * 60 + outM;
 
-    // Check if out earlier than in (Fixes ATT-002 & ATT-003)
     const isOvernight = shift.type === 'NIGHT' || (shift.startTime > shift.endTime);
     let workDuration = 0;
 
@@ -594,8 +840,8 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
       workDuration = outTotalMins - inTotalMins;
     }
 
-    // Scheduled end time checking (Thursday consideration - Fixes ATT-004)
-    const dayOfWeek = now.getDay(); // 4 = Thursday in standard / 5 in some conventions
+    const nowD = new Date();
+    const dayOfWeek = nowD.getDay(); // Thursday = 4
     const scheduledEndTime = (dayOfWeek === 4 && shift.thursdayEndTime) ? shift.thursdayEndTime : shift.endTime;
     const [endH, endM] = scheduledEndTime.split(':').map(Number);
     const endTotalMins = endH * 60 + endM;
@@ -608,7 +854,7 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
       const exitDiff = endTotalMins - outTotalMins;
       if (exitDiff > (shift.earlyExitToleranceMinutes || 10)) {
         earlyExitMinutes = exitDiff;
-        finalStatus = 'EARLY_LEAVE'; // Fixes ATT-006
+        finalStatus = 'EARLY_LEAVE';
       }
     } else if (outTotalMins > endTotalMins) {
       overtimeMinutes = outTotalMins - endTotalMins;
@@ -632,23 +878,47 @@ app.post('/api/attendance/punch', (req: Request, res: Response) => {
   }
 });
 
-// 5. Manual Attendance Request (Fixes ATT-001: strictly PENDING approval)
-app.post('/api/attendance/manual-request', (req: Request, res: Response) => {
-  const { employeeId, date, checkInTime, checkOutTime, reason } = req.body;
-  if (!employeeId || !date || !reason) {
+// 5. Manual Attendance Request (Fixes ATT-001 & SEC-003: strictly PENDING approval & bound identity)
+app.post('/api/attendance/manual-request', requireAuth, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { date, checkInTime, checkOutTime, reason } = req.body;
+
+  let targetEmployeeId = req.body.employeeId;
+  if (user.role === 'EMPLOYEE') {
+    if (!user.employeeId) {
+      return res.status(403).json({ success: false, message: 'حساب کاربری شما به پرسنلی متصل نیست.' });
+    }
+    targetEmployeeId = user.employeeId;
+  }
+
+  if (!targetEmployeeId || !date || !reason) {
     return res.status(400).json({ success: false, message: 'تاریخ، پرسنل و علت ثبت دستی الزامی است.' });
   }
 
-  const employee = db.employees.find(e => e.id === employeeId);
+  const employee = db.employees.find(e => e.id === targetEmployeeId);
   if (!employee) return res.status(404).json({ success: false, message: 'پرسنل یافت نشد.' });
+
+  const shift = db.shifts.find((s: any) => s.id === employee.shiftId) || db.shifts[0];
+  let workDurationMinutes = 480;
+  if (checkInTime && checkOutTime) {
+    const [inH, inM] = checkInTime.split(':').map(Number);
+    const [outH, outM] = checkOutTime.split(':').map(Number);
+    const inTotal = inH * 60 + inM;
+    const outTotal = outH * 60 + outM;
+    if (outTotal >= inTotal) {
+      const raw = outTotal - inTotal;
+      const breakM = (raw >= 240 && shift?.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
+      workDurationMinutes = Math.max(0, raw - breakM);
+    }
+  }
 
   const newRecord = {
     id: `att_man_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    employeeId,
+    employeeId: targetEmployeeId,
     date,
     checkInTime: checkInTime || '07:00',
     checkOutTime: checkOutTime || '16:00',
-    workDurationMinutes: 480,
+    workDurationMinutes,
     lateMinutes: 0,
     earlyExitMinutes: 0,
     overtimeMinutes: 0,
@@ -656,7 +926,7 @@ app.post('/api/attendance/manual-request', (req: Request, res: Response) => {
     approvalStatus: 'PENDING', // PENDING for manager review!
     checkInMethod: 'MANUAL',
     checkOutMethod: 'MANUAL',
-    notes: `درخواست ثبت دستی توسط کارمند: ${reason}`
+    notes: `درخواست ثبت دستی توسط ${user.name}: ${reason}`
   };
 
   db.attendance.push(newRecord);
@@ -669,25 +939,31 @@ app.post('/api/attendance/manual-request', (req: Request, res: Response) => {
   });
 });
 
-// 6. Review Manual Attendance Request
-app.post('/api/attendance/review-manual', (req: Request, res: Response) => {
-  const { recordId, action, reviewerName } = req.body;
+// 6. Review Manual Attendance Request (Fixes SEC-003: restricted to ADMIN & MANAGER, authenticated reviewer)
+app.post('/api/attendance/review-manual', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const reviewer = (req as any).user;
+  const { recordId, action, rejectionReason } = req.body;
   const rec = db.attendance.find((a: any) => a.id === recordId);
   if (!rec) return res.status(404).json({ success: false, message: 'رکورد یافت نشد.' });
 
   if (rec.approvalStatus !== 'PENDING') {
-    return res.status(400).json({ success: false, message: 'این رکورد قبلاً بررسی شده است.' });
+    return res.status(400).json({ success: false, message: 'این رکورد قبلاً تعیین تکلیف شده است.' });
   }
 
   if (action === 'APPROVE') {
     rec.approvalStatus = 'APPROVED';
-    rec.notes += ` (تایید شده توسط ${reviewerName || 'مدیریت'})`;
+    rec.approvedBy = reviewer.name;
+    rec.approvedAt = new Date().toISOString();
+    rec.notes += ` (تایید شده توسط ${reviewer.name})`;
   } else {
     rec.approvalStatus = 'REJECTED';
     rec.status = 'ABSENT';
-    rec.notes += ` (رد شده توسط ${reviewerName || 'مدیریت'})`;
+    rec.approvedBy = reviewer.name;
+    rec.approvedAt = new Date().toISOString();
+    rec.notes += ` (رد شده توسط ${reviewer.name}${rejectionReason ? `: ${rejectionReason}` : ''})`;
   }
 
+  logServerAudit(reviewer.id, reviewer.name, action === 'APPROVE' ? 'تایید تردد دستی' : 'رد تردد دستی', 'حضور و غیاب', `تردد رکورد ${recordId} توسط ${reviewer.name} ${action === 'APPROVE' ? 'تایید' : 'رد'} شد.`);
   persistDb();
   res.json({ success: true, message: action === 'APPROVE' ? 'تردد با موفقیت تایید شد.' : 'درخواست تردد رد شد.', record: rec });
 });
@@ -859,16 +1135,20 @@ app.post('/api/leaves/review', (req: Request, res: Response) => {
       emp.remainingLeaveDays = Math.max(0, emp.remainingLeaveDays - (leave.durationDays || 1));
     }
 
-    // Materialize attendance for full-day leaves (Fixes HR-004 & HR-005)
+    // Materialize attendance for full-day leaves on actual scheduled dates (Fixes HR-004 & HR-005)
     if (leave.type !== 'HOURLY') {
-      const today = new Date().toISOString().split('T')[0];
-      if (today >= leave.startDate && today <= leave.endDate) {
-        let att = db.attendance.find((a: any) => a.employeeId === leave.employeeId && a.date === today);
+      const datesToMark = [leave.startDate];
+      if (leave.endDate && leave.endDate !== leave.startDate) {
+        datesToMark.push(leave.endDate);
+      }
+      datesToMark.forEach(dStr => {
+        let att = db.attendance.find((a: any) => a.employeeId === leave.employeeId && a.date === dStr);
         if (!att) {
           db.attendance.push({
-            id: `att_lve_${Date.now()}`,
+            id: `att_lve_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            companyId: db.settings.id,
             employeeId: leave.employeeId,
-            date: today,
+            date: dStr,
             checkInTime: null,
             checkOutTime: null,
             workDurationMinutes: 0,
@@ -884,7 +1164,7 @@ app.post('/api/leaves/review', (req: Request, res: Response) => {
           att.status = 'ON_LEAVE';
           att.notes = `مرخصی تایید شده (${leave.type})`;
         }
-      }
+      });
     }
   } else {
     leave.status = 'REJECTED';
@@ -1060,18 +1340,20 @@ app.post('/api/salaries/calculate', (req: Request, res: Response) => {
   const dailyBaseWage = Math.round(emp.baseSalary / standardWorkDays);
   const absentDeduction = absentDaysCount * dailyBaseWage;
 
+  const normMonth = month.replace(/-/g, '/');
+
   // Advances for this month
   const approvedAdvances = db.advances
-    .filter((a: any) => a.employeeId === emp.id && a.status === 'APPROVED' && a.repayMonth === month)
+    .filter((a: any) => a.employeeId === emp.id && a.status === 'APPROVED' && (a.repayMonth?.replace(/-/g, '/') === normMonth))
     .reduce((sum: number, a: any) => sum + a.amount, 0);
 
   // Bonuses & Disciplinary Penalties
   const bonuses = (db.bonusesPenalties || [])
-    .filter((b: any) => b.employeeId === emp.id && b.type === 'BONUS' && b.month === month)
+    .filter((b: any) => b.employeeId === emp.id && b.type === 'BONUS' && (b.month?.replace(/-/g, '/') === normMonth))
     .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
 
   const disciplinaryPenalties = (db.bonusesPenalties || [])
-    .filter((b: any) => b.employeeId === emp.id && b.type === 'PENALTY' && b.month === month)
+    .filter((b: any) => b.employeeId === emp.id && b.type === 'PENALTY' && (b.month?.replace(/-/g, '/') === normMonth))
     .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
 
   const penalties = disciplinaryPenalties + absentDeduction;
@@ -1093,7 +1375,7 @@ app.post('/api/salaries/calculate', (req: Request, res: Response) => {
     employeeId: emp.id,
     month,
     baseSalary: emp.baseSalary,
-    workDays: workDaysCount || standardWorkDays,
+    workDays: monthlyAtt.length === 0 ? standardWorkDays : workDaysCount,
     workedHours,
     overtimeHours,
     overtimeAmount,

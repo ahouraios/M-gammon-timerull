@@ -42,10 +42,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   currentUser,
 }) => {
   const isEmployeeRole = currentUser?.role === 'EMPLOYEE';
-  const currentEmp =
-    employees.find((e) => e.id === currentUser?.employeeId) ||
-    employees.find((e) => e.email === currentUser?.email) ||
-    employees[2];
+  const currentEmp = isEmployeeRole
+    ? (employees.find((e) => e.id === currentUser?.employeeId) || employees.find((e) => e.email === currentUser?.email))
+    : (employees.find((e) => e.id === currentUser?.employeeId) || employees.find((e) => e.email === currentUser?.email) || employees[0]);
 
   const todayStr = getTodayShamsi();
   const todayRecord = currentEmp

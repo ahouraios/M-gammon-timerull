@@ -15,6 +15,7 @@ import { StorageService } from '../../services/storage';
 import {
   formatCurrencyTomans,
   getTodayShamsi,
+  getTodayShamsiDetailed,
 } from '../../utils/dateUtils';
 
 interface AdvancesViewProps {
@@ -32,6 +33,22 @@ export const AdvancesView: React.FC<AdvancesViewProps> = ({
   onRefresh,
   canApprove,
 }) => {
+  const shamsiDetail = getTodayShamsiDetailed();
+  const currentMonthStr = shamsiDetail.dateString.substring(0, 7);
+
+  // Dynamic month options
+  const persianMonthNames = [
+    'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
+    'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'
+  ];
+  const repayMonthOptions = Array.from({ length: 12 }, (_, i) => {
+    const m = (i + 1).toString().padStart(2, '0');
+    return {
+      value: `${shamsiDetail.year}/${m}`,
+      label: `${persianMonthNames[i]} ${shamsiDetail.year}${`${shamsiDetail.year}/${m}` === currentMonthStr ? ' (دوره جاری)' : ''}`
+    };
+  });
+
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
@@ -41,7 +58,7 @@ export const AdvancesView: React.FC<AdvancesViewProps> = ({
   const [formData, setFormData] = useState({
     employeeId: currentUser.employeeId || employees[0]?.id || '',
     amount: 5000000,
-    repayMonth: '1405/07',
+    repayMonth: currentMonthStr,
     reason: '',
   });
 
@@ -50,15 +67,17 @@ export const AdvancesView: React.FC<AdvancesViewProps> = ({
     setFormData({
       employeeId: currentUser.employeeId || employees[0]?.id || '',
       amount: 5000000,
-      repayMonth: '1405/07',
+      repayMonth: currentMonthStr,
       reason: '',
     });
     setIsSubmitModalOpen(true);
   };
 
   const filteredAdvances = advances.filter((adv) => {
-    if (currentUser.role === 'EMPLOYEE' && currentUser.employeeId && adv.employeeId !== currentUser.employeeId) {
-      return false;
+    if (currentUser.role === 'EMPLOYEE') {
+      if (!currentUser.employeeId || adv.employeeId !== currentUser.employeeId) {
+        return false;
+      }
     }
     return true;
   });
@@ -469,14 +488,18 @@ export const AdvancesView: React.FC<AdvancesViewProps> = ({
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     دوره تسویه <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
+                  <select
                     required
                     value={formData.repayMonth}
                     onChange={(e) => setFormData({ ...formData, repayMonth: e.target.value })}
-                    className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
-                    placeholder="1405/07"
-                  />
+                    className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono bg-white"
+                  >
+                    {repayMonthOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

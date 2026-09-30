@@ -67,6 +67,17 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Validate session with server if token exists
+    StorageService.validateSessionAsync().then((validUser) => {
+      if (validUser && (!currentUser || currentUser.id !== validUser.id)) {
+        setCurrentUser(validUser);
+      } else if (!validUser && currentUser) {
+        setCurrentUser(null);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
     if (currentUser) {
       loadData(currentUser);
     }
@@ -244,7 +255,7 @@ export default function App() {
               currentUserEmployee={
                 employees.find((e) => e.id === currentUser?.employeeId) ||
                 employees.find((e) => e.email === currentUser?.email) ||
-                employees[0]
+                (currentUser?.role !== 'EMPLOYEE' ? employees[0] : undefined)
               }
             />
           )}

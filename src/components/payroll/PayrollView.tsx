@@ -64,8 +64,10 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
   });
 
   const filteredSalaries = salaries.filter((s) => {
-    if (currentUser.role === 'EMPLOYEE' && currentUser.employeeId && s.employeeId !== currentUser.employeeId) {
-      return false;
+    if (currentUser.role === 'EMPLOYEE') {
+      if (!currentUser.employeeId || s.employeeId !== currentUser.employeeId) {
+        return false;
+      }
     }
     return s.month === selectedMonth;
   });
@@ -230,7 +232,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
           ) : (
             filteredSalaries.map((sal) => {
               const emp = employees.find((e) => e.id === sal.employeeId);
-              const deductions = (sal.insuranceDeduction || 0) + (sal.taxDeduction || 0) + (sal.advancesTotal || 0);
+              const deductions = (sal.insuranceDeduction || 0) + (sal.taxDeduction || 0) + (sal.advancesTotal || 0) + (sal.penaltiesTotal || 0);
               return (
                 <div key={sal.id} className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
@@ -255,7 +257,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                       <span className="font-mono font-semibold text-indigo-600">+{formatCurrencyTomans(sal.overtimeAmount)}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block text-[11px]">کسورات (بیمه/مالیات/مساعده):</span>
+                      <span className="text-slate-400 block text-[11px]">کل کسورات (بیمه/مساعده/غیبت):</span>
                       <span className="font-mono font-medium text-rose-600">-{formatCurrencyTomans(deductions)}</span>
                     </div>
                     <div className="bg-emerald-50/80 p-1.5 rounded-lg border border-emerald-100 col-span-2 flex items-center justify-between">
@@ -289,7 +291,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                 <th className="py-3.5 px-4">اضافه‌کاری</th>
                 <th className="py-3.5 px-4">مزایا و بن‌ها</th>
                 <th className="py-3.5 px-4">کسر مساعده</th>
-                <th className="py-3.5 px-4">بیمه و مالیات</th>
+                <th className="py-3.5 px-4">کسورات قانونی و غیبت</th>
                 <th className="py-3.5 px-4">خالص پرداختی</th>
                 <th className="py-3.5 px-4">وضعیت</th>
                 <th className="py-3.5 px-4 text-center">عملیات</th>
@@ -306,7 +308,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                 filteredSalaries.map((sal) => {
                   const emp = employees.find((e) => e.id === sal.employeeId);
                   const allowances = (sal.housingAllowance || 0) + (sal.groceryAllowance || 0) + (sal.bonusesTotal || 0);
-                  const deductions = (sal.insuranceDeduction || 0) + (sal.taxDeduction || 0);
+                  const statutoryDeductions = (sal.insuranceDeduction || 0) + (sal.taxDeduction || 0) + (sal.penaltiesTotal || 0);
                   return (
                     <tr key={sal.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-3 px-4 font-bold text-slate-900">
@@ -331,7 +333,12 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                         {sal.advancesTotal > 0 ? `-${formatCurrencyTomans(sal.advancesTotal)}` : '---'}
                       </td>
                       <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
-                        -{formatCurrencyTomans(deductions)}
+                        <span className="text-rose-600 font-medium">-{formatCurrencyTomans(statutoryDeductions)}</span>
+                        {sal.penaltiesTotal > 0 && (
+                          <span className="block text-[10px] text-amber-600">
+                            (شامل غیبت: {formatCurrencyTomans(sal.penaltiesTotal)})
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-bold text-slate-900 font-mono text-sm">
                         {formatCurrencyTomans(sal.netSalary)}
