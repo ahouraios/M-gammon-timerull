@@ -342,18 +342,20 @@ export const Header: React.FC<HeaderProps> = ({
                       <span>مشخصات و تغییر رمز عبور</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDropdownOpen(false);
-                        setIsLoginModalOpen(true);
-                      }}
-                      className="w-full py-2 px-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors border border-slate-200"
-                    >
-                      <KeyRound className="w-3.5 h-3.5 text-slate-500" />
-                      <span>ورود با حساب کاربری دیگر</span>
-                    </button>
+                    {currentUser.role !== 'EMPLOYEE' && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDropdownOpen(false);
+                          setIsLoginModalOpen(true);
+                        }}
+                        className="w-full py-2 px-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors border border-slate-200"
+                      >
+                        <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                        <span>ورود با حساب کاربری دیگر</span>
+                      </button>
+                    )}
 
                     {onLogout && (
                       <button

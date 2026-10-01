@@ -13,14 +13,22 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const QR_SECRET = process.env.QR_SECRET || 'mgommon_secret_qr_challenge_key_2026';
+const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
+const BANNERS_DIR = path.join(UPLOADS_DIR, 'banners');
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Ensure data directory exists
+// Ensure data and uploads directories exist
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+if (!fs.existsSync(BANNERS_DIR)) {
+  fs.mkdirSync(BANNERS_DIR, { recursive: true });
+}
+
+// Serve public uploads statically
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Security: Password hashing with PBKDF2 (SHA-256, 100,000 iterations & per-user random salt)
 export function hashPasswordWithSalt(password: string, salt?: string): { hash: string; salt: string } {
@@ -2672,6 +2680,53 @@ app.post('/api/messages', requireRole('ADMIN', 'MANAGER'), async (req: Request, 
     smsStatus: smsResult,
     broadcastMessage: newMsg
   });
+});
+
+// Upload Banner Image to Host Storage
+app.post('/api/upload/banner', (req: Request, res: Response) => {
+  try {
+    const { image } = req.body;
+    if (!image || typeof image !== 'string') {
+      return res.status(400).json({ success: false, message: 'تصویر جهت آپلود ارسال نشده است.' });
+    }
+
+    let buffer: Buffer;
+    let ext = 'jpg';
+
+    if (image.startsWith('data:')) {
+      const parts = image.split(';base64,');
+      if (parts.length === 2) {
+        const mime = parts[0];
+        if (mime.includes('png')) ext = 'png';
+        else if (mime.includes('webp')) ext = 'webp';
+        else if (mime.includes('svg')) ext = 'svg+xml';
+        buffer = Buffer.from(parts[1], 'base64');
+      } else {
+        buffer = Buffer.from(image, 'base64');
+      }
+    } else {
+      buffer = Buffer.from(image, 'base64');
+    }
+
+    const fileName = `banner_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+    const filePath = path.join(BANNERS_DIR, fileName);
+    fs.writeFileSync(filePath, buffer);
+
+    const publicUrl = `/uploads/banners/${fileName}`;
+    if (db.settings) {
+      db.settings.dashboardBannerUrl = publicUrl;
+      persistDb();
+    }
+
+    res.json({
+      success: true,
+      url: publicUrl,
+      message: 'بنر با موفقیت روی هاست ذخیره گردید.'
+    });
+  } catch (err: any) {
+    console.error('Banner upload error:', err);
+    res.status(500).json({ success: false, message: 'خطا در آپلود بنر در هاست: ' + (err?.message || 'نامشخص') });
+  }
 });
 
 // ==========================================

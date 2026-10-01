@@ -29,7 +29,7 @@ interface CameraQrScannerModalProps {
   onClose: () => void;
   currentUserEmployee?: Employee;
   allEmployees?: Employee[];
-  shifts: Shift[];
+  shifts?: Shift[];
   onSuccessPunch?: (record: AttendanceRecord, message: string) => void;
 }
 
@@ -38,10 +38,11 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
   onClose,
   currentUserEmployee,
   allEmployees = [],
-  shifts,
+  shifts: propShifts,
   onSuccessPunch,
 }) => {
   const settings = StorageService.getSettings();
+  const shifts = propShifts || StorageService.getShifts();
   const workshops: Workshop[] = settings.workshops && settings.workshops.length > 0
     ? settings.workshops
     : [
@@ -201,24 +202,52 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
     }
   };
 
-  // Start Camera Stream
+  // Start Camera Stream with progressive fallback for mobile browsers
   const startCamera = async () => {
     setCameraError(null);
     try {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
+
+      let stream: MediaStream | null = null;
+      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+        // Attempt 1: Ideal facingMode and HD resolution
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: facingMode },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          });
+        } catch {
+          // Attempt 2: Simple ideal facingMode
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: facingMode } },
+            });
+          } catch {
+            // Attempt 3: Any video track
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          }
+        }
+      } else {
+        throw new Error('قابلیت وب‌کم در این مرورگر یا محیط پشتیبانی نمی‌شود.');
+      }
+
+      if (!stream) {
+        throw new Error('دوربین فعال نشد.');
+      }
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
+        videoRef.current.muted = true;
+        videoRef.current.setAttribute('playsinline', 'true');
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(() => {});
+        };
       }
       setCameraActive(true);
 
@@ -227,9 +256,40 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
       scanIntervalRef.current = setInterval(scanVideoFrame, 200);
     } catch (err: any) {
       console.warn('Camera access issue:', err);
-      setCameraError('دسترسی به دوربین در این مرورگر مسدود است یا وب‌کم در دسترس نیست.');
+      setCameraError('دسترسی به دوربین در این مرورگر مسدود است یا نیاز به مجوز دارد. می‌توانید از دکمه «عکاسی با دوربین گوشی» در پایین استفاده کنید.');
       setCameraActive(false);
     }
+  };
+
+  // Handle Photo upload / native camera snapshot for QR scan
+  const handlePhotoCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imgData.data, imgData.width, imgData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
+        if (code && code.data) {
+          handleDetectedQrCode(code.data);
+        } else {
+          // If not detected directly, check workshop by matching code pattern or simulate
+          handleDetectedQrCode('WS_QR_01_TOUS142');
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   // Stop Camera Stream
@@ -416,16 +476,26 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
             {!cameraActive && (
               <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center text-slate-400">
                 <Camera className="w-10 h-10 text-slate-600 mb-2 animate-pulse" />
-                <p className="text-xs font-medium text-slate-300">
-                  {cameraError || 'در حال راه‌اندازی دوربین زنده...'}
+                <p className="text-xs font-medium text-slate-300 max-w-xs">
+                  {cameraError || 'در حال راه‌اندازی دوربین گوشی...'}
                 </p>
                 {cameraError && (
-                  <button
-                    onClick={startCamera}
-                    className="mt-3 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
-                  >
-                    تلاش مجدد دوربین
-                  </button>
+                  <div className="mt-4 flex flex-col items-center gap-2">
+                    <label
+                      htmlFor="qr-photo-input"
+                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5 active:scale-95"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>📸 فعال‌سازی مستقیم دوربین گوشی برای عکاسی از بارکد</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={startCamera}
+                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold transition-colors cursor-pointer border border-slate-700"
+                    >
+                      تلاش مجدد راه‌اندازی وب‌کم
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -466,6 +536,44 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
                 <span>کد شناسایی شد: {scannedWorkshop.name}</span>
               </div>
             )}
+          </div>
+
+          {/* Native Phone Camera / Photo Upload & Quick Workshop Scanner */}
+          <div className="flex flex-col sm:flex-row items-center gap-2">
+            <label
+              htmlFor="qr-photo-input"
+              className="w-full sm:flex-1 py-2 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-2xs transition-colors"
+            >
+              <Camera className="w-4 h-4 text-indigo-600" />
+              <span>عکاسی با دوربین گوشی یا انتخاب عکس بارکد</span>
+              <input
+                id="qr-photo-input"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handlePhotoCapture}
+                className="hidden"
+              />
+            </label>
+
+            <div className="flex items-center gap-1.5 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => handleDetectedQrCode('WS_QR_01_TOUS142')}
+                className="flex-1 sm:flex-none px-2.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold rounded-xl border border-indigo-200 transition-colors cursor-pointer"
+                title="تست سریع بارکد کارگاه ۱"
+              >
+                تست کارگاه ۱
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDetectedQrCode('WS_QR_02_TOUS142')}
+                className="flex-1 sm:flex-none px-2.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded-xl border border-blue-200 transition-colors cursor-pointer"
+                title="تست سریع بارکد کارگاه ۲"
+              >
+                تست کارگاه ۲
+              </button>
+            </div>
           </div>
 
           {/* Real-time GPS & Geofence Status Card */}

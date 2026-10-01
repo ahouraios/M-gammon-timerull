@@ -477,35 +477,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
                 </p>
               </div>
 
-              {/* Account Selector */}
-              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 text-right space-y-2">
-                <label className="text-[11px] text-slate-400 block">
-                  حساب کاربری جهت ورود:
+              {/* Account Identifier Input for Biometric */}
+              <div className="bg-slate-800/80 p-3.5 rounded-2xl border border-slate-700 text-right space-y-2">
+                <label className="text-[11px] text-slate-300 block font-medium">
+                  کد پرسنلی یا نام کاربری جهت ورود:
                 </label>
-                <div className="space-y-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBioUser('admin')}
-                    className={`w-full p-2.5 rounded-xl text-xs font-bold text-right flex items-center justify-between transition-all cursor-pointer ${
-                      selectedBioUser === 'admin'
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                        : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700 border border-transparent'
-                    }`}
-                  >
-                    <span>مجید نورایی (مالک و مدیر ارشد)</span>
-                    <span className="text-[10px] font-mono text-slate-400">admin</span>
-                  </button>
-
-                  <div className="pt-1">
-                    <input
-                      type="text"
-                      value={selectedBioUser === 'admin' ? '' : selectedBioUser}
-                      onChange={(e) => setSelectedBioUser(e.target.value)}
-                      placeholder="یا کد پرسنلی / شماره موبایل کارگر..."
-                      className="w-full text-xs p-2 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 font-mono focus:border-amber-400 focus:outline-none"
-                    />
-                  </div>
-                </div>
+                <input
+                  type="text"
+                  value={selectedBioUser === 'admin' ? (rememberedUser?.personalCode || rememberedUser?.phone || '') : selectedBioUser}
+                  onChange={(e) => setSelectedBioUser(e.target.value)}
+                  placeholder="کد پرسنلی یا شماره موبایل..."
+                  className="w-full text-xs p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 font-mono focus:border-amber-400 focus:outline-none"
+                />
+                <p className="text-[10px] text-slate-400">
+                  شناسه کاربری خود را وارد کنید، سپس روی حسگر زیر انگشت بگذارید.
+                </p>
               </div>
 
               {/* Glowing Interactive Fingerprint Scanner Icon */}

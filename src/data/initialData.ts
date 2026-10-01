@@ -21,6 +21,7 @@ export const initialCompanySettings: CompanySettings = {
   companyCode: 'MG-101',
   ownerName: 'مجید نورایی (مدیر ارشد)',
   logoUrl: '',
+  dashboardBannerUrl: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1600&q=80',
   address: 'مشهد، توس ۱۴۲، حسین زاده ۸',
   phoneNumber: '۰۵۱-۳۶۹۰۹۰۹۰',
   officeLat: 36.37660,

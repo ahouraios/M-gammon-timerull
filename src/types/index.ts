@@ -336,6 +336,7 @@ export interface CompanySettings {
   companyCode: string;
   ownerName?: string;
   logoUrl?: string;
+  dashboardBannerUrl?: string; // بنر هدر داشبورد (قابل آپلود فایل در هاست یا انتخاب پیش‌فرض)
   address: string;
   phoneNumber: string;
   officeLat: number;

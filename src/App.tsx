@@ -38,7 +38,10 @@ import {
 export default function App() {
   // State
   const [currentUser, setCurrentUser] = useState<User | null>(() => StorageService.getCurrentUser());
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<NavTab>(() => {
+    const user = StorageService.getCurrentUser();
+    return user?.role === 'EMPLOYEE' ? 'employee-portal' : 'dashboard';
+  });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Core Data
@@ -150,28 +153,6 @@ export default function App() {
         onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
         pendingRequestsCount={pendingLeaves + pendingAdvances}
       />
-
-      {/* Return to Admin Banner if inspecting employee/manager account */}
-      {currentUser.role !== 'ADMIN' && (
-        <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-indigo-700 text-white px-4 py-2.5 text-xs font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm border-b border-amber-500/30">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse shrink-0" />
-            <span>
-              شما هم‌اکنون در پرتال پرسنلی <strong>{currentUser.name}</strong> ({currentUser.role === 'MANAGER' ? 'مدیر منابع انسانی' : 'پرسنل'}) هستید.
-            </span>
-          </div>
-          <button
-            onClick={() => {
-              const admin = StorageService.getUsers().find((u) => u.role === 'ADMIN');
-              if (admin) handleUserChange(admin);
-            }}
-            className="bg-white text-slate-900 hover:bg-amber-50 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer shrink-0 border border-white/60 active:scale-98"
-          >
-            <Shield className="w-3.5 h-3.5 text-indigo-600" />
-            <span>بازگشت به حساب مدیریت ارشد (مجید نورائی)</span>
-          </button>
-        </div>
-      )}
 
       {/* Main Layout Container */}
       <div className="flex-1 flex max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8 gap-6 pb-24 md:pb-8">
