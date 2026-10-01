@@ -272,7 +272,12 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
   const isWithinRadius = currentGps !== null && distanceMeters <= (targetWs.allowedRadiusMeters || 35);
 
   // Check if employee assigned workshop matches scanned workshop (Fixes GPS-005)
-  const isCorrectAssignedWorkshop = !selectedEmp?.workshopId || !scannedWorkshop || selectedEmp.workshopId === scannedWorkshop.id;
+  const isCorrectAssignedWorkshop =
+    !selectedEmp?.workshopId ||
+    !scannedWorkshop ||
+    selectedEmp.workshopId === 'ws_both' ||
+    selectedEmp.workshopId === 'ws_free' ||
+    selectedEmp.workshopId === scannedWorkshop.id;
 
   const hasAttendancePermission = StorageService.hasPermission(selectedEmp, 1);
 

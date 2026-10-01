@@ -245,12 +245,124 @@ export function calculateGpsDistanceMeters(
 }
 
 /**
+ * Converts Persian and Arabic digits to standard English digits
+ */
+export function toEnglishDigits(str: any): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
+    .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+}
+
+/**
+ * Formats a 16-digit debit card number into 4-digit groups (e.g. 6037-9974-1234-5678)
+ */
+export function formatCardNumber(card: any): string {
+  if (!card) return '';
+  const digits = toEnglishDigits(card).replace(/\D/g, '').slice(0, 16);
+  return digits.replace(/(\d{4})(?=\d)/g, '$1-');
+}
+
+/**
+ * Detects Iranian issuing bank from first 6 digits of debit card
+ */
+export function detectIranianBank(cardNumber: string): string | null {
+  if (!cardNumber) return null;
+  const clean = toEnglishDigits(cardNumber).replace(/\D/g, '');
+  if (clean.length < 6) return null;
+  const bin = clean.substring(0, 6);
+  const banks: Record<string, string> = {
+    '603799': 'بانک ملی ایران',
+    '589210': 'بانک سپه',
+    '627381': 'بانک سپه (انصار سابق)',
+    '603770': 'بانک کشاورزی',
+    '628023': 'بانک مسکن',
+    '627412': 'بانک اقتصاد نوین',
+    '622106': 'بانک پارسیان',
+    '502229': 'بانک پاسارگاد',
+    '627488': 'بانک کارآفرین',
+    '621986': 'بانک سامان',
+    '639346': 'بانک سینا',
+    '639607': 'بانک سرمایه',
+    '636214': 'بانک آینده',
+    '502806': 'بانک شهر',
+    '504706': 'بانک شهر',
+    '502908': 'بانک توسعه تعاون',
+    '603769': 'بانک صادرات ایران',
+    '610433': 'بانک ملت',
+    '627353': 'بانک تجارت',
+    '589463': 'بانک رفاه کارگران',
+    '505785': 'بانک ایران زمین',
+    '606373': 'بانک قرض‌الحسنه مهر ایران',
+    '505801': 'بانک کوثر',
+    '505416': 'بانک گردشگری',
+    '606256': 'موسسه اعتباری ملل',
+  };
+  return banks[bin] || null;
+}
+
+/**
+ * Converts numbers into Persian words in Tomans
+ * (e.g. 28000000 -> بیست و هشت میلیون تومان)
+ */
+export function numberToPersianWords(num: number | string): string {
+  const cleanStr = toEnglishDigits(num).replace(/\D/g, '');
+  if (!cleanStr) return '';
+  const n = parseInt(cleanStr, 10);
+  if (isNaN(n) || n === 0) return 'صفر تومان';
+
+  const yekan = ['', 'یک', 'دو', 'سه', 'چهار', 'پنج', 'شش', 'هفت', 'هشت', 'نه'];
+  const dahha = ['', 'ده', 'بیست', 'سی', 'چهل', 'پنجاه', 'شصت', 'هفتاد', 'هشتاد', 'نود'];
+  const dahYek = ['ده', 'یازده', 'دوازده', 'سیزده', 'چهارده', 'پانزده', 'شانزده', 'هفده', 'هجده', 'نوزده'];
+  const sadha = ['', 'صد', 'دویست', 'سیصد', 'چهارصد', 'پانصد', 'ششصد', 'هفتصد', 'هشتصد', 'نهصد'];
+  const scale = ['', 'هزار', 'میلیون', 'میلیارد', 'تریلیون'];
+
+  function convertChunk(chunk: number): string {
+    const parts: string[] = [];
+    const c = Math.floor(chunk / 100);
+    const remainder = chunk % 100;
+    const d = Math.floor(remainder / 10);
+    const y = remainder % 10;
+
+    if (c > 0) parts.push(sadha[c]);
+
+    if (remainder >= 10 && remainder <= 19) {
+      parts.push(dahYek[remainder - 10]);
+    } else {
+      if (d > 0) parts.push(dahha[d]);
+      if (y > 0) parts.push(yekan[y]);
+    }
+
+    return parts.join(' و ');
+  }
+
+  const chunks: number[] = [];
+  let temp = n;
+  while (temp > 0) {
+    chunks.push(temp % 1000);
+    temp = Math.floor(temp / 1000);
+  }
+
+  const resultWords: string[] = [];
+  for (let i = chunks.length - 1; i >= 0; i--) {
+    const chunkVal = chunks[i];
+    if (chunkVal > 0) {
+      const words = convertChunk(chunkVal);
+      const scaleWord = scale[i];
+      resultWords.push(scaleWord ? `${words} ${scaleWord}` : words);
+    }
+  }
+
+  return resultWords.join(' و ') + ' تومان';
+}
+
+/**
  * Validates 10-digit Iranian National Code using standard Luhn-like algorithm
- * Fixes SET-002
+ * Supports both English and Persian digits
  */
 export function isValidIranianNationalCode(code: string): boolean {
   if (!code) return false;
-  const clean = code.trim().replace(/\D/g, '');
+  const clean = toEnglishDigits(code).trim().replace(/\D/g, '');
   if (clean.length !== 10) return false;
 
   // Disallow all identical digits like 0000000000, 1111111111, etc.
@@ -267,19 +379,21 @@ export function isValidIranianNationalCode(code: string): boolean {
 
 /**
  * Validates Iranian mobile phone number (09xx xxx xxxx)
+ * Supports both English and Persian digits
  */
 export function isValidIranianPhone(phone: string): boolean {
   if (!phone) return false;
-  const clean = phone.trim().replace(/\s|-/g, '');
+  const clean = toEnglishDigits(phone).trim().replace(/[\s-]/g, '');
   return /^09\d{9}$/.test(clean);
 }
 
 /**
  * Validates Iranian Sheba (IBAN) format (IR followed by 24 digits, or 24 digits)
+ * Supports both English and Persian digits
  */
 export function isValidSheba(sheba: string): boolean {
   if (!sheba) return false;
-  const clean = sheba.trim().toUpperCase().replace(/\s/g, '');
+  const clean = toEnglishDigits(sheba).trim().toUpperCase().replace(/\s/g, '');
   if (/^IR\d{24}$/.test(clean)) return true;
   if (/^\d{24}$/.test(clean)) return true;
   return false;
@@ -287,10 +401,11 @@ export function isValidSheba(sheba: string): boolean {
 
 /**
  * Validates 16-digit Iranian bank debit card number
+ * Supports both English and Persian digits
  */
 export function isValidCardNumber(card: string): boolean {
   if (!card) return false;
-  const clean = card.trim().replace(/[\s-]/g, '');
+  const clean = toEnglishDigits(card).trim().replace(/[\s-]/g, '');
   return /^\d{16}$/.test(clean);
 }
 

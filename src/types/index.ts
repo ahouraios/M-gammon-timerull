@@ -4,20 +4,66 @@ export interface PermissionLevel {
   level: number;
   title: string;
   description: string;
-  category: 'ATTENDANCE' | 'REQUESTS' | 'FINANCE' | 'SUPERVISION' | 'SYSTEM';
+  category: 'ATTENDANCE' | 'REQUESTS' | 'FINANCE' | 'SUPERVISION' | 'SYSTEM' | 'HR';
 }
 
+export interface ManagementRole {
+  id: string;
+  title: string;
+  category: 'SUPERVISION' | 'FINANCE' | 'HR' | 'OPERATIONS';
+  description: string;
+}
+
+export const MANAGEMENT_ROLES: ManagementRole[] = [
+  {
+    id: 'WORKSHOP_SUPERVISOR',
+    title: 'سرپرست کارگاه (نظارت شیفت و تردد)',
+    category: 'SUPERVISION',
+    description: 'نظارت بر تردد پرسنل کارگاه، ثبت تردد اضطراری/دستی، بررسی حضور پرسنل'
+  },
+  {
+    id: 'LEAVE_ADVANCE_OFFICER',
+    title: 'مسئول بررسی اولیه مرخصی و مساعده',
+    category: 'SUPERVISION',
+    description: 'بررسی و تایید/رد مرحله اول درخواست‌های مرخصی و مساعده پرسنل کارگاه'
+  },
+  {
+    id: 'FINANCE_OFFICER',
+    title: 'امور مالی و حسابداری حقوق',
+    category: 'FINANCE',
+    description: 'دسترسی به بخش محاسبه کارکرد، صدور فیش‌ها، تسویه فاکتورها و پرداخت‌های متفرقه'
+  },
+  {
+    id: 'HR_ADMIN',
+    title: 'کارشناس منابع انسانی و امور اداری',
+    category: 'HR',
+    description: 'تعریف و ویرایش پرونده پرسنل، تخصیص شیفت‌ها، ثبت مأموریت‌ها و تقویم کاری'
+  },
+  {
+    id: 'WORKSHOP_MESSENGER',
+    title: 'اطلاع‌رسانی و پیام‌رسانی کارگاه',
+    category: 'OPERATIONS',
+    description: 'ارسال اطلاعیه‌ها، پیام‌های داخلی و بخشنامه‌های کارگاهی به پرسنل'
+  },
+  {
+    id: 'REPORTS_ANALYST',
+    title: 'تحلیل‌گر گزارشات و آمار کارگاه',
+    category: 'OPERATIONS',
+    description: 'مشاهده آمار تجمیعی ساعات کاری، اضافه‌کار و تاخیرها با خروجی اکسل'
+  }
+];
+
 export const PERMISSION_LEVELS: PermissionLevel[] = [
-  { level: 1, title: 'ثبت تردد هوشمند (اسکن دوربین و GPS)', description: 'اجازه ثبت ورود و خروج با اسکن QR کد چاپ شده کارگاه و استعلام موقعیت مکانی', category: 'ATTENDANCE' },
-  { level: 2, title: 'مشاهده کارکرد و سوابق تردد شخصی', description: 'مشاهده گزارش تردد روزانه، ساعات کارکرد خالص، تاخیرها و اضافه‌کاری ثبت شده', category: 'ATTENDANCE' },
-  { level: 3, title: 'ثبت و پیگیری درخواست مرخصی', description: 'ارسال درخواست‌های مرخصی استحقاقی، استعلاجی، ساعتی و بدون حقوق', category: 'REQUESTS' },
+  { level: 1, title: 'ثبت تردد هوشمند (اسکن دوربین و GPS)', description: 'ثبت ورود و خروج با اسکن بارکد QR کارگاه', category: 'ATTENDANCE' },
+  { level: 2, title: 'مشاهده کارکرد و سوابق تردد شخصی', description: 'مشاهده گزارش کارکرد، تاخیرها و ساعات کارکرد خالص', category: 'ATTENDANCE' },
+  { level: 3, title: 'ثبت و پیگیری درخواست مرخصی', description: 'ارسال درخواست‌های مرخصی استحقاقی، ساعتی، استعلاجی و بدون حقوق', category: 'REQUESTS' },
   { level: 4, title: 'ثبت و پیگیری درخواست مساعده حقوق', description: 'درخواست مساعده مالی در بازه زمانی مجاز ماهانه', category: 'REQUESTS' },
-  { level: 5, title: 'مشاهده و دانلود فیش حقوقی شخصی', description: 'دسترسی به فیش‌های رسمی حقوق با مهر دیجیتال و جزئیات کسورات و اضافه‌کار', category: 'FINANCE' },
-  { level: 6, title: 'مشاهده اعلانات و پیام‌های سازمانی', description: 'دریافت بخشنامه‌ها، اطلاعیه‌ها و پیام‌های عمومی و کارگاهی', category: 'SYSTEM' },
-  { level: 7, title: 'ثبت تردد اضطراری همکاران (سرپرستی)', description: 'امکان ثبت تردد دستی یا اضطراری برای اعضای تیم کارگاهی در صورت خرابی دستگاه', category: 'SUPERVISION' },
-  { level: 8, title: 'مشاهده گزارشات تجمیعی کارکرد بخش', description: 'مشاهده گزارشات حضور و غیاب و اضافه‌کاری پرسنل زیرمجموعه', category: 'SUPERVISION' },
-  { level: 9, title: 'تایید و بررسی اولیه مرخصی/مساعده', description: 'تایید یا رد مرحله اول درخواست‌های پرسنلی پیش از تایید نهایی مدیر', category: 'SUPERVISION' },
-  { level: 10, title: 'مدیریت شیفت‌ها و پیام‌رسانی داخلی', description: 'دسترسی به تقویم شیفت‌های کاری کارگاه و ارسال پیام‌های اضطراری', category: 'SYSTEM' },
+  { level: 5, title: 'مشاهده و دانلود فیش حقوقی شخصی', description: 'دسترسی به فیش‌های رسمی حقوق با مهر دیجیتال', category: 'FINANCE' },
+  { level: 6, title: 'مشاهده اعلانات و پیام‌های سازمانی', description: 'دریافت بخشنامه‌ها و پیام‌های عمومی و کارگاهی', category: 'SYSTEM' },
+  { level: 7, title: 'سرپرست کارگاه و نظارت تردد', description: 'ثبت تردد دستی اعضای کارگاه در مواقع اضطراری', category: 'SUPERVISION' },
+  { level: 8, title: 'بررسی اولیه مرخصی و مساعده', description: 'تایید یا رد مرحله اول درخواست‌های پرسنل کارگاه', category: 'SUPERVISION' },
+  { level: 9, title: 'امور مالی و حسابداری حقوق', description: 'محاسبه کارکرد، تسویه فاکتورها و پرداخت‌های متفرقه', category: 'FINANCE' },
+  { level: 10, title: 'منابع انسانی و امور پرسنلی', description: 'مدیریت شیفت‌ها، پرونده پرسنل و تقویم کاری', category: 'HR' },
 ];
 
 export interface User {
@@ -31,7 +77,8 @@ export interface User {
   phone: string;
   role: Role;
   isSuperAdmin?: boolean; // مدیر اصلی
-  permissions?: number[]; // سطوح دسترسی ۱ تا ۱۰
+  permissions?: number[]; // سطوح دسترسی
+  managementRoles?: string[]; // نقش‌های اختیارات مدیریتی
   workshopId?: string;
   avatarUrl?: string;
 }
@@ -93,7 +140,8 @@ export interface Employee {
   overtimeRate: number; // multiplier e.g. 1.4
   remainingLeaveDays: number;
   isConfidential?: boolean; // مدیریت شخصی/اختصاصی توسط مدیر ارشد (مخفی کامل از مدیر منابع انسانی)
-  permissions?: number[]; // سطوح دسترسی ۱ تا ۱۰
+  permissions?: number[]; // سطوح دسترسی
+  managementRoles?: string[]; // نقش‌های اختیارات مدیریتی
 }
 
 export interface Shift {

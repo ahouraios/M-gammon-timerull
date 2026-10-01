@@ -30,7 +30,7 @@ import {
   initialBonusesPenalties,
   initialBroadcastMessages
 } from '../data/initialData';
-import { getCurrentTimeStr, getTodayShamsi, calculateGpsDistanceMeters, formatCurrencyTomans, getDatesBetweenShamsi } from '../utils/dateUtils';
+import { getCurrentTimeStr, getTodayShamsi, calculateGpsDistanceMeters, formatCurrencyTomans, getDatesBetweenShamsi, toEnglishDigits, formatCardNumber } from '../utils/dateUtils';
 
 const STORAGE_KEYS = {
   SETTINGS: 'mgommon_company_settings_v4',
@@ -584,6 +584,59 @@ export class StorageService {
     return true;
   }
 
+  static changeUserPassword(userId: string, oldPass: string, newPass: string): { success: boolean; message: string } {
+    const list = this.getAllUsersRaw();
+    const user = list.find(u => u.id === userId);
+    if (!user) {
+      return { success: false, message: 'کاربر مورد نظر در سامانه یافت نشد.' };
+    }
+    const normOld = toEnglishDigits(oldPass).trim();
+    const normNew = toEnglishDigits(newPass).trim();
+
+    if (user.password && user.password !== normOld) {
+      return { success: false, message: 'کلمه عبور فعلی نادرست است.' };
+    }
+    if (normNew.length < 4) {
+      return { success: false, message: 'کلمه عبور جدید باید حداقل ۴ کاراکتر باشد.' };
+    }
+
+    user.password = normNew;
+    this.saveUsers(list);
+
+    // Update associated employee's password record as well
+    if (user.employeeId) {
+      const emps = this.getAllEmployeesRaw();
+      const emp = emps.find(e => e.id === user.employeeId);
+      if (emp) {
+        emp.password = normNew;
+        this.saveEmployees(emps);
+      }
+    }
+
+    // Update active session user if same
+    const current = this.getCurrentUser();
+    if (current && current.id === userId) {
+      current.password = normNew;
+      this.setCurrentUser(current);
+    }
+
+    // Async sync to server
+    const token = this.getAuthToken();
+    if (token) {
+      fetch('/api/users/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ userId, oldPassword: normOld, newPassword: normNew })
+      }).catch(err => console.warn('Server password sync:', err));
+    }
+
+    this.addAuditLog('تغییر کلمه عبور', 'حساب کاربری', `کلمه عبور کاربر ${user.name} بروزرسانی شد.`);
+    return { success: true, message: 'کلمه عبور شما با موفقیت تغییر یافت.' };
+  }
+
   // ==========================================================
   // EMPLOYEES CRUD (Fixes DATA-001 & DATA-002)
   // ==========================================================
@@ -617,9 +670,18 @@ export class StorageService {
 
   static addEmployee(emp: Employee): void {
     const list = this.getAllEmployeesRaw();
+    const cleanPhone = toEnglishDigits(emp.phone).trim();
+    const cleanNationalCode = toEnglishDigits(emp.nationalCode).trim();
+    const cleanCard = emp.cardNumber ? toEnglishDigits(emp.cardNumber).replace(/[\s-]/g, '') : '';
+
     const preparedEmp: Employee = {
       ...emp,
-      permissions: emp.permissions && emp.permissions.length > 0 ? emp.permissions : [1],
+      phone: cleanPhone,
+      nationalCode: cleanNationalCode,
+      cardNumber: cleanCard,
+      personalCode: toEnglishDigits(emp.personalCode).trim(),
+      permissions: emp.permissions && emp.permissions.length > 0 ? emp.permissions : [1, 2, 3, 4, 5, 6],
+      managementRoles: emp.managementRoles || [],
       isConfidential: Boolean(emp.isConfidential),
     };
     list.unshift(preparedEmp);
@@ -627,10 +689,10 @@ export class StorageService {
 
     // Create user in raw users list
     const users = this.getAllUsersRaw();
-    const username = (emp.username?.trim() || (emp.nationalCode ? `emp_${emp.nationalCode.slice(-4)}` : `user_${emp.personalCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`)).toLowerCase();
+    const username = (emp.username?.trim() || (cleanNationalCode ? `emp_${cleanNationalCode.slice(-4)}` : `user_${emp.personalCode.toLowerCase().replace(/[^a-z0-9]/g, '')}`)).toLowerCase();
     
-    // No hardcoded 123 password (Fixes AUTH-007)
-    const secureInitialPass = emp.password || `M@${emp.nationalCode ? emp.nationalCode.slice(-4) : '2026'}`;
+    // Secure initial password (Fixes AUTH-007)
+    const secureInitialPass = emp.password?.trim() || `M@${cleanNationalCode ? cleanNationalCode.slice(-4) : '2026'}`;
     const newUser: User = {
       id: `usr_${emp.id}`,
       companyId: emp.companyId || 'comp_mgommon_01',
@@ -639,9 +701,10 @@ export class StorageService {
       password: secureInitialPass,
       name: `${emp.firstName} ${emp.lastName}`,
       email: emp.email || `${username}@mgommon.ir`,
-      phone: emp.phone,
+      phone: cleanPhone,
       role: 'EMPLOYEE',
       permissions: preparedEmp.permissions,
+      managementRoles: preparedEmp.managementRoles,
       workshopId: emp.workshopId || 'ws_1',
       avatarUrl: emp.avatarUrl
     };
@@ -655,7 +718,7 @@ export class StorageService {
     this.addAuditLog(
       'ثبت پرسنل جدید',
       'پرسنل',
-      `پرسنل جدید ${emp.firstName} ${emp.lastName} با سطح دسترسی [${(preparedEmp.permissions || []).join(', ')}] ثبت شد.`
+      `پرسنل جدید ${emp.firstName} ${emp.lastName} با نقش کارگاهی و اختیارات [${(preparedEmp.managementRoles || []).join(', ') || 'پرسنل اجرایی'}] ثبت شد.`
     );
   }
 
@@ -665,16 +728,27 @@ export class StorageService {
 
     let finalPermissions = emp.permissions;
     let finalConfidential = emp.isConfidential;
+    let finalManagementRoles = emp.managementRoles;
     if (curUser && curUser.role !== 'ADMIN') {
       if (existing) {
         finalPermissions = existing.permissions;
         finalConfidential = existing.isConfidential;
+        finalManagementRoles = existing.managementRoles;
       }
     }
 
+    const cleanPhone = toEnglishDigits(emp.phone).trim();
+    const cleanNationalCode = toEnglishDigits(emp.nationalCode).trim();
+    const cleanCard = emp.cardNumber ? toEnglishDigits(emp.cardNumber).replace(/[\s-]/g, '') : '';
+
     const preparedEmp: Employee = {
       ...emp,
-      permissions: finalPermissions && finalPermissions.length > 0 ? finalPermissions : [1],
+      phone: cleanPhone,
+      nationalCode: cleanNationalCode,
+      cardNumber: cleanCard,
+      personalCode: toEnglishDigits(emp.personalCode).trim(),
+      permissions: finalPermissions && finalPermissions.length > 0 ? finalPermissions : [1, 2, 3, 4, 5, 6],
+      managementRoles: finalManagementRoles || [],
       isConfidential: Boolean(finalConfidential),
     };
 
@@ -688,11 +762,12 @@ export class StorageService {
         return {
           ...u,
           name: `${emp.firstName} ${emp.lastName}`,
-          phone: emp.phone,
+          phone: cleanPhone,
           email: emp.email || u.email,
           username: emp.username?.trim().toLowerCase() || u.username,
-          password: emp.password || u.password,
+          password: emp.password?.trim() || u.password,
           permissions: preparedEmp.permissions || u.permissions,
+          managementRoles: preparedEmp.managementRoles || u.managementRoles,
           workshopId: emp.workshopId || u.workshopId,
           avatarUrl: emp.avatarUrl || u.avatarUrl
         };
@@ -2218,9 +2293,76 @@ export class StorageService {
     setItem(STORAGE_KEYS.AUDIT_LOGS, [newLog, ...logs.slice(0, 500)]);
   }
 
-  static hasPermission(employee: Employee | null | undefined, level: number): boolean {
-    if (!employee || !employee.permissions) return false;
-    return employee.permissions.includes(level);
+  // Workers unconditionally have core worker rights (1..6: clock in, personal attendance, leaves, advances, salary slip, messages)
+  static hasPermission(employee: Employee | null | undefined, level: number | string): boolean {
+    if (!employee) return false;
+    // Core worker tasks (1..6) are unconditional worker rights, not managerial privileges
+    if (typeof level === 'number' && level <= 6) return true;
+    if (typeof level === 'number') {
+      return (employee.permissions || []).includes(level);
+    }
+    return (employee.managementRoles || []).includes(level);
+  }
+
+  // Change Password for worker / user
+  static async changePasswordAsync(currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    const curUser = this.getCurrentUser();
+    if (!curUser) {
+      return { success: false, message: 'کاربر احراز هویت نشده است.' };
+    }
+    const cleanNew = String(newPassword || '').trim();
+    if (cleanNew.length < 4) {
+      return { success: false, message: 'رمز عبور جدید باید حداقل ۴ کاراکتر باشد.' };
+    }
+
+    // 1. Update user record locally
+    const users = this.getAllUsersRaw();
+    const uIdx = users.findIndex(u => u.id === curUser.id || (u.employeeId && u.employeeId === curUser.employeeId));
+    if (uIdx !== -1) {
+      const targetUser = users[uIdx];
+      if (currentPassword && targetUser.password && targetUser.password !== currentPassword.trim()) {
+        return { success: false, message: 'رمز عبور فعلی وارد شده اشتباه است.' };
+      }
+      targetUser.password = cleanNew;
+      this.saveUsers(users);
+    }
+
+    // 2. Also update employee record if applicable
+    if (curUser.employeeId) {
+      const emps = this.getAllEmployeesRaw();
+      const empIdx = emps.findIndex(e => e.id === curUser.employeeId);
+      if (empIdx !== -1) {
+        emps[empIdx].password = cleanNew;
+        this.saveEmployees(emps);
+      }
+    }
+
+    // 3. Update current user in session
+    curUser.password = cleanNew;
+    this.setCurrentUser(curUser);
+
+    // 4. Also call server endpoint to persist securely
+    const token = this.getAuthToken();
+    try {
+      await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ currentPassword, newPassword: cleanNew })
+      });
+    } catch {
+      // Offline fallback
+    }
+
+    this.addAuditLog(
+      'تغییر رمز عبور',
+      'امنیت',
+      `رمز عبور حساب کاربری ${curUser.name} با موفقیت توسط خود پرسنل تغییر یافت.`
+    );
+
+    return { success: true, message: 'رمز عبور با موفقیت تغییر یافت.' };
   }
 
   static resetToDefaults(): void {

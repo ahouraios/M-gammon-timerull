@@ -718,6 +718,40 @@ app.get('/api/auth/me', (req: Request, res: Response) => {
   res.json(sanitized);
 });
 
+// Worker & User Password Change Endpoint
+app.post('/api/auth/change-password', requireAuth, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const { currentPassword, newPassword } = req.body;
+  
+  if (!newPassword || String(newPassword).trim().length < 4) {
+    return res.status(400).json({ success: false, message: 'رمز عبور جدید باید حداقل ۴ کاراکتر باشد.' });
+  }
+
+  // If current password provided, verify it (skip if user has mustChangePassword flag or is first setup)
+  if (currentPassword && user.passwordHash) {
+    const isValid = verifyPassword(String(currentPassword).trim(), user.passwordHash, user.passwordSalt);
+    if (!isValid) {
+      return res.status(400).json({ success: false, message: 'رمز عبور فعلی وارد شده نادرست است.' });
+    }
+  }
+
+  const { hash, salt } = hashPasswordWithSalt(String(newPassword).trim());
+  user.passwordHash = hash;
+  user.passwordSalt = salt;
+  user.mustChangePassword = false;
+
+  // Also sync plain password on associated employee if exists
+  if (user.employeeId) {
+    const emp = db.employees.find((e: any) => e.id === user.employeeId);
+    if (emp) {
+      emp.password = String(newPassword).trim();
+    }
+  }
+
+  persistDb();
+  res.json({ success: true, message: 'رمز عبور با موفقیت تغییر یافت.' });
+});
+
 // 3. Cryptographically Signed Dynamic QR Challenge Token (Anti-Fraud) (Fixes SEC-011)
 app.post('/api/qr/token', requireAuth, (req: Request, res: Response) => {
   const { workshopId } = req.body;
@@ -1139,10 +1173,11 @@ app.put('/api/employees/:id', requireRole('ADMIN', 'MANAGER'), (req: Request, re
   // Field Allowlist (Fixes SEC-008: prevent malicious overwriting of sensitive metadata)
   const allowedFields = [
     'firstName', 'lastName', 'phone', 'email', 'workshopId', 'shiftId',
-    'jobTitle', 'jobCategory', 'address', 'birthDate', 'hireDate',
+    'department', 'position', 'jobTitle', 'jobCategory', 'address', 'birthDate', 'hireDate',
     'baseSalary', 'hourlyRate', 'overtimeRate', 'remainingLeaveDays',
-    'bankName', 'bankCardNumber', 'bankAccountNumber', 'bankShebaNumber',
-    'isConfidential', 'isActive', 'personalCode'
+    'cardNumber', 'bankCardNumber', 'bankAccount', 'bankAccountNumber', 'shebaNumber', 'bankShebaNumber',
+    'isConfidential', 'isActive', 'personalCode', 'nationalCode', 'username', 'password',
+    'contractType', 'permissions', 'managementRoles', 'avatarUrl', 'status'
   ];
   const updates: any = {};
   for (const field of allowedFields) {

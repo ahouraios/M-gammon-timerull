@@ -267,7 +267,7 @@ export default function App() {
               messages={messages}
               onRefresh={loadData}
               canSend={currentUser.role === 'ADMIN' || currentUser.role === 'MANAGER'}
-              onNavigate={setActiveTab}
+              onNavigate={(tab) => setActiveTab(tab as any)}
             />
           )}
 
