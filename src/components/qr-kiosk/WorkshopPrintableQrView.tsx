@@ -89,7 +89,7 @@ export const WorkshopPrintableQrView: React.FC<WorkshopPrintableQrViewProps> = (
               </h1>
             </div>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              بر اساس تصمیم جدید، کد QR روی تابلوی ورودی کارگاه چاپ و نصب می‌گردد. پرسنل با دوربین گوشی این تابلو را اسکن کرده و به همراه استعلام GPS، تردد و اضافه‌کار ثبت می‌شود.
+              کد QR روی تابلوی ورودی کارگاه چاپ و نصب می‌گردد. پرسنل با دوربین گوشی این تابلو را اسکن کرده و به همراه موقعیت مکانی معتبر، تردد ثبت می‌شود.
             </p>
           </div>
 
@@ -100,7 +100,7 @@ export const WorkshopPrintableQrView: React.FC<WorkshopPrintableQrViewProps> = (
               className="px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs flex items-center gap-2"
             >
               <Camera className="w-4 h-4" />
-              <span>تست اسکن با دوربین گوشی</span>
+              <span>اسکن بارکد با دوربین گوشی</span>
             </button>
 
             <button

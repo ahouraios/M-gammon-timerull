@@ -1184,38 +1184,57 @@ export class StorageService {
     const emp = employees.find(e => e.id === req.employeeId);
     if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
 
-    const checkIn = req.checkInTime || '07:00';
-    const checkOut = req.checkOutTime || '16:00';
-    const [inH, inM] = checkIn.split(':').map(Number);
-    const [outH, outM] = checkOut.split(':').map(Number);
-    const inTotal = inH * 60 + inM;
-    const outTotal = outH * 60 + outM;
-    const rawMins = Math.max(0, outTotal - inTotal);
-    const shift = this.getShifts().find(s => s.id === emp.shiftId) || this.getShifts()[0];
-    const breakMins = (rawMins >= 240 && shift?.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
-    const netMins = Math.max(0, rawMins - breakMins);
+    const records = this.getAllAttendanceRaw();
+    const existing = records.find(r => r.employeeId === req.employeeId && r.date === req.date);
 
+    const checkIn = req.checkInTime || existing?.checkInTime || '07:00';
+    const checkOut = req.checkOutTime !== undefined ? req.checkOutTime : (existing?.checkOutTime || '');
+    
+    const shift = this.getShifts().find(s => s.id === emp.shiftId) || this.getShifts()[0];
+    const [startH, startM] = (shift?.startTime || '07:00').split(':').map(Number);
     const [endH, endM] = (shift?.endTime || '16:00').split(':').map(Number);
+    const schedStartMins = startH * 60 + startM;
     const schedEndMins = endH * 60 + endM;
+
+    let netMins = 0;
+    let lateMins = 0;
     let earlyExitMins = 0;
     let overtimeMins = 0;
     let attStatus: AttendanceRecord['status'] = 'PRESENT';
-    if (outTotal < schedEndMins - (shift?.earlyExitToleranceMinutes || 0)) {
-      earlyExitMins = schedEndMins - outTotal;
-      attStatus = 'EARLY_LEAVE';
-    } else if (outTotal > schedEndMins) {
-      overtimeMins = outTotal - schedEndMins;
+
+    if (checkIn) {
+      const [inH, inM] = checkIn.split(':').map(Number);
+      const inTotal = inH * 60 + inM;
+      if (inTotal > schedStartMins + (shift?.lateToleranceMinutes || 15)) {
+        lateMins = inTotal - schedStartMins;
+        attStatus = 'LATE';
+      }
+
+      if (checkOut) {
+        const [outH, outM] = checkOut.split(':').map(Number);
+        const outTotal = outH * 60 + outM;
+        const rawMins = Math.max(0, outTotal - inTotal);
+        const breakMins = (rawMins >= 240 && shift?.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
+        netMins = Math.max(0, rawMins - breakMins);
+
+        if (outTotal < schedEndMins - (shift?.earlyExitToleranceMinutes || 0)) {
+          earlyExitMins = schedEndMins - outTotal;
+          attStatus = 'EARLY_LEAVE';
+        } else if (outTotal > schedEndMins) {
+          overtimeMins = outTotal - schedEndMins;
+        }
+      }
     }
 
     const newRecord: AttendanceRecord = {
-      id: `att_man_${Date.now()}`,
+      id: existing ? existing.id : `att_man_${Date.now()}`,
       companyId: emp.companyId || 'comp_mgommon_01',
       employeeId: req.employeeId,
       date: req.date,
       checkInTime: checkIn,
       checkOutTime: checkOut,
       workDurationMinutes: netMins,
-      lateMinutes: 0,
+      lateMinutes: lateMins,
       earlyExitMinutes: earlyExitMins,
       overtimeMinutes: overtimeMins,
       status: attStatus,
@@ -1225,8 +1244,11 @@ export class StorageService {
       notes: `درخواست ثبت دستی: ${req.reason}`
     };
 
-    const records = this.getAllAttendanceRaw();
-    this.saveAttendance([newRecord, ...records]);
+    const updatedRecords = existing
+      ? records.map(r => r.id === existing.id ? newRecord : r)
+      : [newRecord, ...records];
+
+    this.saveAttendance(updatedRecords);
     this.addAuditLog('درخواست تردد دستی', 'حضور و غیاب', `ثبت درخواست تردد دستی برای ${emp.firstName} ${emp.lastName}`);
 
     return {
@@ -2048,7 +2070,7 @@ export class StorageService {
           ? ((settings.dailyWorkHours || 8) * 60)
           : (typeof a.workDurationMinutes === 'number' && a.workDurationMinutes > 0
               ? a.workDurationMinutes
-              : (a.checkInTime && a.checkOutTime ? 0 : ((settings.dailyWorkHours || 8) * 60)));
+              : 0);
         totalWorkedMinutes += dayMins;
         totalOvertimeMins += (a.overtimeMinutes || 0);
       }

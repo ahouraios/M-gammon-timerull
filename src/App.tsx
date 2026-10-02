@@ -191,7 +191,9 @@ export default function App() {
               leaves={leaves}
               advances={advances}
               salaries={salaries}
+              auditLogs={auditLogs}
               onNavigate={setActiveTab}
+              onRefresh={loadData}
               onQuickClockIn={() => {
                 if (currentUser.employeeId) {
                   StorageService.clockIn(currentUser.employeeId, 'MANUAL');

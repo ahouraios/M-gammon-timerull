@@ -886,12 +886,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                    formData.smsProvider === 'SMS_IR' ? 'سامانه SMS.ir' : 'وب‌سرویس اختصاصی'}
                 </span>
                 <p className="text-[11px] text-indigo-800 leading-relaxed font-normal">
-                  {formData.smsProvider === 'KAVENEGAR' && 'کلید وب‌سرویس (API Key) را از منوی کاربری «حساب کاربری > مشخصات حساب» در پنل کاوه‌نگار کپی نمایید. شماره فرستنده نیز شماره خط اختصاصی شما در کاوه‌نگار (مثلاً ۱۰۰۰... یا ۳۰۰۰...) می‌باشد. در صورت داشتن خط خدماتی، کدهای تایید به صورت آنی به خطوط بلک‌لیست نیز تحویل داده می‌شوند.'}
-                  {formData.smsProvider === 'IPPANEL_FARAZ' && 'کلید وب‌سرویس را از منوی «پشتیبانی > دسترسی‌های API / وب‌سرویس» در پنل فراز اس‌ام‌اس دریافت کنید. شماره خط فرستنده اختصاصی کارگاه (مثلاً +983000... یا +985000...) را در فیلد شماره فرستنده وارد نمایید.'}
+                  {formData.smsProvider === 'KAVENEGAR' && 'کلید اتصال پیامک را از منوی کاربری «حساب کاربری > مشخصات حساب» در پنل کاوه‌نگار کپی نمایید. شماره فرستنده نیز شماره خط پیامکی کارگاه شما در کاوه‌نگار می‌باشد. در صورت فعال بودن خط خدماتی، پیامک‌ها به صورت آنی به کلیه پرسنل تحویل داده می‌شوند.'}
+                  {formData.smsProvider === 'IPPANEL_FARAZ' && 'کلید اتصال را از بخش وب‌سرویس در پنل فراز اس‌ام‌اس دریافت کنید. شماره خط فرستنده کارگاه (مثلاً ۳۰۰۰... یا ۵۰۰۰...) را در فیلد شماره فرستنده وارد نمایید.'}
                   {formData.smsProvider === 'MELIPAYAMAK' && 'نام کاربری و کلمه عبور ورود به پرتال ملی‌پیامک خود را در کادرهای زیر وارد کنید. همچنین شماره خط فرستنده تایید شده در بخش شماره‌های اختصاصی ملی‌پیامک را درج نمایید.'}
-                  {formData.smsProvider === 'GHASEDAK' && 'کلید دسترسی (API Key) را از بخش «تنظیمات وب‌سرویس» در پنل کاربری قاصدک کپی نموده و شماره خط اختصاصی ارسال‌کننده خود را ثبت کنید.'}
-                  {formData.smsProvider === 'SMS_IR' && 'کلید دسترسی (X-API-KEY) را از داشبورد کاربری سامانه SMS.ir بخش برنامه‌نویسان کپی کرده و شماره خط فرستنده را در فیلد مربوطه قرار دهید.'}
-                  {formData.smsProvider === 'CUSTOM' && 'آدرس کامل Endpoint وب‌سرویس پیامکی خود را با پروتکل https وارد کنید. درخواست‌ها با متد POST و هدر توکن امنیتی ارسال خواهند شد.'}
+                  {formData.smsProvider === 'GHASEDAK' && 'کلید اتصال را از پنل کاربری قاصدک کپی نموده و شماره خط پیامکی کارگاه را ثبت کنید.'}
+                  {formData.smsProvider === 'SMS_IR' && 'کلید اتصال را از داشبورد کاربری سامانه SMS.ir کپی کرده و شماره خط فرستنده را در فیلد مربوطه قرار دهید.'}
+                  {formData.smsProvider === 'CUSTOM' && 'آدرس اینترنتی سامانه پیامکی مورد نظر خود را وارد کنید. سیستم به صورت خودکار پیامک‌ها را از این مسیر ارسال خواهد کرد.'}
                 </p>
               </div>
             </div>
@@ -902,7 +902,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {formData.smsProvider !== 'MELIPAYAMAK' && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>کلید اختصاصی اتصال پیامک (API Key)</span>
+                    <span>کلید اختصاصی اتصال سامانه پیامک</span>
                     <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
                   </label>
                   <div className="relative">
@@ -912,9 +912,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       value={formData.smsApiKey || ''}
                       onChange={(e) => setFormData({ ...formData, smsApiKey: e.target.value })}
                       placeholder={
-                        formData.smsProvider === 'KAVENEGAR' ? 'مثال: 4A586B744E456B52...' :
-                        formData.smsProvider === 'IPPANEL_FARAZ' ? 'کلید وب‌سرویس فراز' :
-                        formData.smsProvider === 'SMS_IR' ? 'مثال: 7e89ab...' : 'کد امنیتی اتصال'
+                        formData.smsProvider === 'KAVENEGAR' ? 'کد کلید اتصال کاوه‌نگار' :
+                        formData.smsProvider === 'IPPANEL_FARAZ' ? 'کلید اتصال فراز' :
+                        formData.smsProvider === 'SMS_IR' ? 'کلید اتصال SMS.ir' : 'کد امنیتی اتصال'
                       }
                       className="w-full text-xs p-2.5 pl-9 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
                     />
@@ -985,11 +985,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </>
               )}
 
-              {/* Pattern / Template Code (Optional for Kavenegar and IPPanel) */}
+              {/* Pattern Code */}
               {(formData.smsProvider === 'KAVENEGAR' || formData.smsProvider === 'IPPANEL_FARAZ') && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>کد الگو / پترن پیامک خدماتی (Pattern / Template Code)</span>
+                    <span>کد الگوی پیامک کارگاه</span>
                     <span className="text-[10px] text-slate-400 font-normal">اختیاری</span>
                   </label>
                   <input
@@ -997,11 +997,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     disabled={!canEdit}
                     value={formData.smsPatternCode || ''}
                     onChange={(e) => setFormData({ ...formData, smsPatternCode: e.target.value })}
-                    placeholder="مثال: mgammon-alert یا کد عددی پترن"
+                    placeholder="کد شناسه الگوی تایید شده در پنل پیامک"
                     className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
                   />
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    جهت ارسال پیامک به خطوطی که پیامک‌های تبلیغاتی را مسدود کرده‌اند (بلک‌لیست)
+                    جهت ارسال پیامک به خطوطی که پیامک‌های عمومی را مسدود کرده‌اند
                   </span>
                 </div>
               )}
@@ -1010,7 +1010,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {formData.smsProvider === 'CUSTOM' && (
                 <div className="col-span-1 md:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>آدرس کامل وب‌سرویس اختصاصی (REST URL Endpoint)</span>
+                    <span>آدرس اینترنتی سامانه پیامک دلخواه</span>
                     <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
                   </label>
                   <input
@@ -1018,7 +1018,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     disabled={!canEdit}
                     value={formData.smsCustomEndpoint || ''}
                     onChange={(e) => setFormData({ ...formData, smsCustomEndpoint: e.target.value })}
-                    placeholder="https://api.your-sms-provider.ir/v1/send"
+                    placeholder="https://sms-provider.ir/send"
                     className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
                   />
                 </div>

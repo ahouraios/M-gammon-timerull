@@ -555,25 +555,6 @@ export const CameraQrScannerModal: React.FC<CameraQrScannerModalProps> = ({
                 className="hidden"
               />
             </label>
-
-            <div className="flex items-center gap-1.5 w-full sm:w-auto">
-              <button
-                type="button"
-                onClick={() => handleDetectedQrCode('WS_QR_01_TOUS142')}
-                className="flex-1 sm:flex-none px-2.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold rounded-xl border border-indigo-200 transition-colors cursor-pointer"
-                title="تست سریع بارکد کارگاه ۱"
-              >
-                تست کارگاه ۱
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDetectedQrCode('WS_QR_02_TOUS142')}
-                className="flex-1 sm:flex-none px-2.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded-xl border border-blue-200 transition-colors cursor-pointer"
-                title="تست سریع بارکد کارگاه ۲"
-              >
-                تست کارگاه ۲
-              </button>
-            </div>
           </div>
 
           {/* Real-time GPS & Geofence Status Card */}
