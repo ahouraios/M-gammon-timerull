@@ -789,16 +789,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="space-y-0.5">
                 <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                   <MessageSquare className="w-4 h-4 text-indigo-600" />
-                  <span>سامانه و پنل پیامک واقعی (Real SMS Gateway)</span>
+                  <span>سامانه اطلاع‌رسانی و ارسال پیامک به پرسنل</span>
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  تنظیمات وب‌سرویس و پنل پیامکی جهت ارسال واقعی پیامک‌های پرتال، کدهای تایید، اعلان‌های اداری و مالی به پرسنل
+                  تنظیمات خط و درگاه پیامکی جهت ارسال خودکار اعلان‌های ورود و خروج، پیام‌ها و اطلاعیه‌ها به شماره همراه پرسنل
                 </p>
               </div>
 
               {/* SMS Enable/Disable Toggle */}
               <label className="flex items-center gap-2 cursor-pointer select-none">
-                <span className="text-xs font-semibold text-slate-700">وضعیت ارسال پیامک:</span>
+                <span className="text-xs font-semibold text-slate-700">ارسال خودکار پیامک:</span>
                 <input
                   type="checkbox"
                   disabled={!canEdit}
@@ -816,7 +816,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {formData.smsEnabled ? (
                     <>
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      <span>✓ فعال برای ارسال واقعی</span>
+                      <span>✓ فعال</span>
                     </>
                   ) : (
                     <span>✕ غیرفعال</span>
@@ -829,20 +829,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-bold text-slate-700">
-                  انتخاب پنل پیامک طرف قرارداد شما (SMS Gateway Provider)
+                  انتخاب سامانه و درگاه پیامکی طرف قرارداد شما
                 </label>
                 <span className="text-[11px] text-indigo-600 font-medium">
-                  پشتیبانی از پروتکل‌های رسمی وب‌سرویس ایران
+                  پشتیبانی از درگاه‌های معتبر پیامک کشور
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
                 {[
-                  { id: 'KAVENEGAR', title: 'کاوه‌نگار', subtitle: 'Kavenegar', desc: 'وب‌سرویس REST و Verify', badge: 'رسمی' },
+                  { id: 'KAVENEGAR', title: 'کاوه‌نگار', subtitle: 'Kavenegar', desc: 'ارسال آنی پیامک و تایید هویت', badge: 'رسمی' },
                   { id: 'IPPANEL_FARAZ', title: 'فراز اس‌ام‌اس', subtitle: 'IPPanel / فراز', desc: 'ارسال با خط خدماتی و پترن', badge: 'محبوب' },
-                  { id: 'MELIPAYAMAK', title: 'ملی‌پیامک', subtitle: 'Melipayamak', desc: 'وب‌سرویس شرکتی با User/Pass', badge: 'رسمی' },
-                  { id: 'GHASEDAK', title: 'قاصدک', subtitle: 'Ghasedak', desc: 'ارسال متنی سریع OTP', badge: 'رسمی' },
-                  { id: 'SMS_IR', title: 'SMS.ir', subtitle: 'سامانه اِس‌ام‌اس دات‌آی‌آر', desc: 'وب‌سرویس نسخه جدید v1', badge: 'رسمی' },
-                  { id: 'CUSTOM', title: 'وب‌سرویس دلخواه', subtitle: 'Custom REST API', desc: 'آدرس URL و هدر اختصاصی', badge: 'سفارشی' },
+                  { id: 'MELIPAYAMAK', title: 'ملی‌پیامک', subtitle: 'Melipayamak', desc: 'ارسال شرکتی با شناسه حساب', badge: 'رسمی' },
+                  { id: 'GHASEDAK', title: 'قاصدک', subtitle: 'Ghasedak', desc: 'ارسال سریع پیامک به پرسنل', badge: 'رسمی' },
+                  { id: 'SMS_IR', title: 'SMS.ir', subtitle: 'سامانه SMS.ir', desc: 'ارسال سازمانی با خط خدماتی', badge: 'رسمی' },
+                  { id: 'CUSTOM', title: 'سامانه دلخواه', subtitle: 'سایر درگاه‌ها', desc: 'اتصال به سامانه پیامکی دیگر', badge: 'سفارشی' },
                 ].map((item) => {
                   const isSelected = (formData.smsProvider || 'KAVENEGAR') === item.id;
                   return (
@@ -902,7 +902,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {formData.smsProvider !== 'MELIPAYAMAK' && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>کلید دسترسی وب‌سرویس (API Key / Token)</span>
+                    <span>کلید اختصاصی اتصال پیامک (API Key)</span>
                     <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
                   </label>
                   <div className="relative">
@@ -913,8 +913,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={(e) => setFormData({ ...formData, smsApiKey: e.target.value })}
                       placeholder={
                         formData.smsProvider === 'KAVENEGAR' ? 'مثال: 4A586B744E456B52...' :
-                        formData.smsProvider === 'IPPANEL_FARAZ' ? 'مثال: uY-aB9... یا توکن وب‌سرویس فراز' :
-                        formData.smsProvider === 'SMS_IR' ? 'مثال: 7e89ab...' : 'کلید توکن وب‌سرویس'
+                        formData.smsProvider === 'IPPANEL_FARAZ' ? 'کلید وب‌سرویس فراز' :
+                        formData.smsProvider === 'SMS_IR' ? 'مثال: 7e89ab...' : 'کد امنیتی اتصال'
                       }
                       className="w-full text-xs p-2.5 pl-9 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
                     />
@@ -927,7 +927,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </button>
                   </div>
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    کلید امنیتی اتصال نرم‌افزار به پنل پیامک شما
+                    کلید امنیتی ارائه‌شده توسط سامانه پیامک جهت احراز هویت
                   </span>
                 </div>
               )}
@@ -935,7 +935,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {/* Sender Line Number */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>شماره خط فرستنده (Sender Line Number)</span>
+                  <span>شماره خط فرستنده پیامک</span>
                   <span className="text-[10px] text-slate-400 font-normal">خط اختصاصی / خدماتی</span>
                 </label>
                 <input
@@ -947,7 +947,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
-                  شماره خط ارسال‌کننده تاییدشده در پنل کاربری پیامک شما
+                  شماره خط فرستنده پیامک‌های کارگاه به پرسنل
                 </span>
               </div>
 
@@ -1085,10 +1085,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <Send className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>تست ارسال پیامک واقعی به شماره تلفن همراه دلخواه</span>
+                  <span>تست ارسال پیامک به شماره تلفن همراه دلخواه</span>
                 </span>
                 <span className="text-[11px] text-slate-400">
-                  ارسال یک پیامک آزمایشی واقعی از طریق درگاه انتخابی
+                  ارسال پیامک آزمایشی جهت بررسی صحت اتصال خط
                 </span>
               </div>
 

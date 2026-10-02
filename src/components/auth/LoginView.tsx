@@ -36,7 +36,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   const [rememberedUser, setRememberedUser] = useState<RememberedUser | null>(null);
   const [isQuickLoginMode, setIsQuickLoginMode] = useState(false);
   const [isBiometricModalOpen, setIsBiometricModalOpen] = useState(false);
-  const [selectedBioUser, setSelectedBioUser] = useState<string>('admin');
+  const [selectedBioUser, setSelectedBioUser] = useState<string>('');
   const [isScanningFingerprint, setIsScanningFingerprint] = useState(false);
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
       setRememberedUser(cached);
       setLoginId(cached.personalCode || cached.username || cached.phone || '');
       setIsQuickLoginMode(true);
-      setSelectedBioUser(cached.username || cached.phone || 'admin');
+      setSelectedBioUser(cached.personalCode || cached.username || cached.phone || '');
     }
   }, []);
 
@@ -97,19 +97,20 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     const safeTargetId = typeof customTargetId === 'string' && customTargetId.trim()
       ? customTargetId.trim()
       : (isQuickLoginMode && rememberedUser
-        ? rememberedUser.username || rememberedUser.phone || loginId.trim()
+        ? rememberedUser.personalCode || rememberedUser.phone || rememberedUser.username || loginId.trim()
         : loginId.trim() || undefined);
 
     if (!safeTargetId && !isBiometricModalOpen) {
       setIsBiometricModalOpen(true);
-      // Auto-trigger scan for default admin user
-      setTimeout(() => {
-        handleBiometricLogin(selectedBioUser || 'admin');
-      }, 250);
       return;
     }
 
-    const effectiveId = safeTargetId || selectedBioUser || 'admin';
+    const effectiveId = safeTargetId || selectedBioUser || loginId.trim();
+    if (!effectiveId) {
+      setErrorMsg('لطفاً ابتدا کد پرسنلی یا نام کاربری خود را وارد نمایید.');
+      return;
+    }
+
     setIsSubmitting(true);
     setIsScanningFingerprint(true);
 
@@ -210,12 +211,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
               )}
             </div>
 
-            {/* 2. Title & Owner */}
+            {/* 2. Title & Professional Subtitle */}
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-wide">
               {settings.companyName || 'M.GAMMON'}
             </h1>
             <p className="text-xs text-slate-500 font-medium mt-1">
-              مجید نورایی
+              سامانه هوشمند مدیریت تردد و امور پرسنلی کارگاه
             </p>
 
             {/* 11. Workshop Location Badge */}
@@ -445,12 +446,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
             )}
           </div>
 
-          {/* 12. Minimal Footer */}
+          {/* Minimal Clean Footer */}
           <div className="bg-slate-50/80 px-6 py-3.5 border-t border-slate-100 text-center">
-            <p className="text-[11px] text-slate-400 font-medium tracking-wide">
-              © M.GAMMON • مجید نورایی
+            <p className="text-[11px] text-slate-500 font-medium tracking-wide">
+              سامانه جامع مدیریت تردد و پرسنلی M.GAMMON
             </p>
-            <DeveloperBadge variant="footer" className="mt-1" />
           </div>
 
         </div>

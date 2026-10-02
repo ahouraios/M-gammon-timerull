@@ -144,15 +144,17 @@ export default function App() {
       className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col font-sans antialiased selection:bg-indigo-500 selection:text-white overflow-x-hidden w-full max-w-full"
       dir="rtl"
     >
-      {/* Header */}
-      <Header
-        currentUser={currentUser}
-        onUserChange={handleUserChange}
-        onLogout={handleLogout}
-        onNavigateToRequests={() => setActiveTab('leaves')}
-        onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-        pendingRequestsCount={pendingLeaves + pendingAdvances}
-      />
+      {/* Header (Only rendered for Management/Admin views; Employee Portal integrates app title, menu, and logout directly on its hero banner) */}
+      {!(currentUser.role === 'EMPLOYEE' || activeTab === 'employee-portal') && (
+        <Header
+          currentUser={currentUser}
+          onUserChange={handleUserChange}
+          onLogout={handleLogout}
+          onNavigateToRequests={() => setActiveTab('leaves')}
+          onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          pendingRequestsCount={pendingLeaves + pendingAdvances}
+        />
+      )}
 
       {/* Main Layout Container */}
       <div className="flex-1 flex max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8 gap-6 pb-24 md:pb-8">
@@ -313,6 +315,7 @@ export default function App() {
               salaries={salaries}
               onRefresh={loadData}
               onNavigate={setActiveTab}
+              onLogout={handleLogout}
             />
           )}
         </main>

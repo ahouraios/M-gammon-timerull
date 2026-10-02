@@ -1159,11 +1159,15 @@ export class StorageService {
 
     const updatedList = records.map(r => r.id === existing.id ? updatedRecord : r);
     this.saveAttendance(updatedList);
-    this.addAuditLog('ثبت خروج', 'حضور و غیاب', `خروج ${emp.firstName} ${emp.lastName} در ساعت ${timeNow}`);
+    this.addAuditLog('ثبت خروج', 'حضور و غیاب', `خروج ${emp.firstName} ${emp.lastName} در ساعت ${timeNow} (کارکرد: ${netWorkedMins} دقیقه)`);
+
+    const workedHoursStr = `${Math.floor(netWorkedMins / 60)} ساعت و ${netWorkedMins % 60} دقیقه`;
+    const earlyNotice = earlyExitMinutes > 0 ? ` (خروج زودهنگام: ${Math.floor(earlyExitMinutes / 60)} ساعت و ${earlyExitMinutes % 60} دقیقه)` : '';
+    const overtimeNotice = overtimeMinutes > 0 ? ` (اضافه‌کاری: ${Math.floor(overtimeMinutes / 60)} ساعت و ${overtimeMinutes % 60} دقیقه)` : '';
 
     return {
       success: true,
-      message: `خروج شما در ساعت ${timeNow} با موفقیت ثبت شد.`,
+      message: `خروج شما در ساعت ${timeNow} با موفقیت ثبت شد. کارکرد امروز: ${workedHoursStr}${earlyNotice}${overtimeNotice}.`,
       record: updatedRecord
     };
   }
@@ -1180,18 +1184,41 @@ export class StorageService {
     const emp = employees.find(e => e.id === req.employeeId);
     if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
 
+    const checkIn = req.checkInTime || '07:00';
+    const checkOut = req.checkOutTime || '16:00';
+    const [inH, inM] = checkIn.split(':').map(Number);
+    const [outH, outM] = checkOut.split(':').map(Number);
+    const inTotal = inH * 60 + inM;
+    const outTotal = outH * 60 + outM;
+    const rawMins = Math.max(0, outTotal - inTotal);
+    const shift = this.getShifts().find(s => s.id === emp.shiftId) || this.getShifts()[0];
+    const breakMins = (rawMins >= 240 && shift?.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
+    const netMins = Math.max(0, rawMins - breakMins);
+
+    const [endH, endM] = (shift?.endTime || '16:00').split(':').map(Number);
+    const schedEndMins = endH * 60 + endM;
+    let earlyExitMins = 0;
+    let overtimeMins = 0;
+    let attStatus: AttendanceRecord['status'] = 'PRESENT';
+    if (outTotal < schedEndMins - (shift?.earlyExitToleranceMinutes || 0)) {
+      earlyExitMins = schedEndMins - outTotal;
+      attStatus = 'EARLY_LEAVE';
+    } else if (outTotal > schedEndMins) {
+      overtimeMins = outTotal - schedEndMins;
+    }
+
     const newRecord: AttendanceRecord = {
       id: `att_man_${Date.now()}`,
       companyId: emp.companyId || 'comp_mgommon_01',
       employeeId: req.employeeId,
       date: req.date,
-      checkInTime: req.checkInTime || '07:00',
-      checkOutTime: req.checkOutTime || '16:00',
-      workDurationMinutes: 480,
+      checkInTime: checkIn,
+      checkOutTime: checkOut,
+      workDurationMinutes: netMins,
       lateMinutes: 0,
-      earlyExitMinutes: 0,
-      overtimeMinutes: 0,
-      status: 'PRESENT',
+      earlyExitMinutes: earlyExitMins,
+      overtimeMinutes: overtimeMins,
+      status: attStatus,
       approvalStatus: 'PENDING', // PENDING for manager approval!
       checkInMethod: 'MANUAL',
       checkOutMethod: 'MANUAL',
@@ -2017,7 +2044,12 @@ export class StorageService {
       // Include worked days and paid approved leave (ON_LEAVE)
       if (a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE' || a.status === 'ON_LEAVE') {
         workedDaysCount++;
-        totalWorkedMinutes += (a.workDurationMinutes || ((settings.dailyWorkHours || 8) * 60));
+        const dayMins = a.status === 'ON_LEAVE'
+          ? ((settings.dailyWorkHours || 8) * 60)
+          : (typeof a.workDurationMinutes === 'number' && a.workDurationMinutes > 0
+              ? a.workDurationMinutes
+              : (a.checkInTime && a.checkOutTime ? 0 : ((settings.dailyWorkHours || 8) * 60)));
+        totalWorkedMinutes += dayMins;
         totalOvertimeMins += (a.overtimeMinutes || 0);
       }
     });

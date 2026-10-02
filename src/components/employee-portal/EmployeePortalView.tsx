@@ -67,6 +67,7 @@ interface EmployeePortalViewProps {
   salaries: SalaryRecord[];
   onRefresh: () => void;
   onNavigate: (tab: NavTab) => void;
+  onLogout?: () => void;
 }
 
 export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
@@ -78,13 +79,17 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   salaries,
   onRefresh,
   onNavigate,
+  onLogout,
 }) => {
   const shamsi = getTodayShamsiDetailed();
+  const settings = StorageService.getSettings();
   const isEmployeeRole = currentUser.role === 'EMPLOYEE';
   const currentEmployee =
     employees.find((e) => e.id === currentUser.employeeId) ||
     employees.find((e) => e.email === currentUser.email) ||
     (!isEmployeeRole && employees.length > 0 ? employees[0] : undefined);
+
+  const shift = StorageService.getShifts().find((s) => s.id === currentEmployee?.shiftId) || StorageService.getShifts()[0];
 
   const todayRecord = attendance.find(
     (a) => a.employeeId === currentEmployee?.id && a.date === shamsi.dateString
@@ -407,51 +412,98 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   return (
     <div className="space-y-4 w-full max-w-xl mx-auto pb-10">
       
-      {/* Top Mobile Bar matching Image 3 (Deep Indigo Header) */}
-      <div className="bg-[#1E1B4B] text-white rounded-3xl p-4 sm:p-5 shadow-lg flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('open-mobile-drawer'))}
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
-            title="منوی ناوبری"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
+      {/* Top Banner with integrated App Title, Menu, Worker Profile, and Logout Button */}
+      <div className="bg-[#1E1B4B] text-white rounded-3xl p-4 sm:p-5 shadow-lg space-y-4 border border-indigo-950/60">
+        {/* Top Header Row on Banner */}
+        <div className="flex items-center justify-between gap-3 border-b border-indigo-900/60 pb-3">
+          {/* Right: Menu Button + App Title & Branding */}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-mobile-drawer'))}
+              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer shadow-xs shrink-0"
+              title="منوی ناوبری"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            <div>
+              <h1 className="text-sm sm:text-base font-black text-white tracking-wide flex items-center gap-1.5">
+                <span>{settings.companyName || 'کارگاه صنایع چوب ام.گامان'}</span>
+              </h1>
+              <p className="text-[10px] sm:text-[11px] text-indigo-300 font-medium">
+                سامانه هوشمند و پرتال اختصاصی پرسنل
+              </p>
+            </div>
+          </div>
+
+          {/* Left: Logout Button + Notification Bell */}
+          <div className="flex items-center gap-2">
+            {onLogout && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('آیا مایل به خروج از حساب کاربری خود هستید؟')) {
+                    onLogout();
+                  }
+                }}
+                className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-600/90 border border-rose-400/40 text-rose-200 hover:text-white transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                title="خروج از حساب کاربری"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">خروج از حساب</span>
+              </button>
+            )}
+
+            <div className="relative p-2 text-white/80 hover:text-white cursor-pointer rounded-xl hover:bg-white/10 transition-colors">
+              <Bell className="w-5 h-5" />
+              <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                ۱
+              </span>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <h2 className="text-sm font-extrabold text-white">
-              {currentEmployee.firstName} {currentEmployee.lastName}
-            </h2>
-            <div className="text-[11px] font-mono text-indigo-200">
-              {currentEmployee.personalCode}
+        {/* Worker Info Row on Banner */}
+        <div className="flex items-center justify-between gap-3 pt-0.5">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <div className="w-12 h-12 rounded-2xl ring-2 ring-indigo-400 bg-indigo-700 text-white flex items-center justify-center font-black text-base overflow-hidden shadow-sm">
+                {avatarPreview ? (
+                  <img src={avatarPreview} alt={currentEmployee.firstName} className="w-full h-full object-cover" />
+                ) : (
+                  <span>{currentEmployee.firstName.charAt(0)}</span>
+                )}
+              </div>
+              <label
+                htmlFor="worker-avatar-input"
+                className="absolute -bottom-1 -left-1 w-5 h-5 bg-indigo-600 rounded-full flex items-center justify-center cursor-pointer shadow-md hover:bg-indigo-500"
+                title="تغییر عکس پرسنلی"
+              >
+                <Camera className="w-2.5 h-2.5 text-white" />
+                <input id="worker-avatar-input" type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
+              </label>
+            </div>
+
+            <div className="text-right">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse ring-2 ring-emerald-400/30" />
+                <h2 className="text-sm sm:text-base font-extrabold text-white">
+                  {currentEmployee.firstName} {currentEmployee.lastName}
+                </h2>
+              </div>
+              <div className="text-[11px] font-mono text-indigo-200 mt-0.5">
+                کد پرسنلی: {currentEmployee.personalCode} • {currentEmployee.position || 'پرسنل کارگاه'}
+              </div>
             </div>
           </div>
 
-          <div className="relative">
-            <div className="w-11 h-11 rounded-full ring-2 ring-indigo-400 bg-indigo-700 text-white flex items-center justify-center font-bold text-sm overflow-hidden shadow-sm">
-              {avatarPreview ? (
-                <img src={avatarPreview} alt={currentEmployee.firstName} className="w-full h-full object-cover" />
-              ) : (
-                <span>{currentEmployee.firstName.charAt(0)}</span>
-              )}
-            </div>
-            <label
-              htmlFor="worker-avatar-input"
-              className="absolute -bottom-1 -left-1 w-5 h-5 bg-indigo-600 rounded-full flex items-center justify-center cursor-pointer shadow-md hover:bg-indigo-500"
-              title="تغییر عکس"
-            >
-              <Camera className="w-2.5 h-2.5 text-white" />
-              <input id="worker-avatar-input" type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
-            </label>
-          </div>
-
-          <div className="relative p-2 text-white/80 hover:text-white cursor-pointer">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
-              ۱
+          <div className="text-left hidden xs:block">
+            <span className="text-[10px] text-indigo-300 block font-mono">
+              {shamsi.dayOfWeek} {shamsi.day} {shamsi.monthName}
+            </span>
+            <span className="inline-block px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30 mt-1">
+              آنلاین در سامانه
             </span>
           </div>
         </div>
@@ -482,7 +534,7 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
             </div>
           </div>
 
-          <div className="text-right space-y-1">
+          <div className="text-right space-y-2">
             <h3 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
               <Clock className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>
@@ -490,15 +542,56 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
                   ? 'تردد امروز شما با موفقیت ثبت نهایی شد'
                   : isClockedIn
                   ? `شما حاضر در کارگاه هستید (ورود: ${todayRecord?.checkInTime})`
-                  : 'شیفت امروز شروع نشده'}
+                  : 'شیفت امروز هنوز ثبت نشده'}
               </span>
             </h3>
-            <div className="text-xs text-slate-600 flex items-center justify-between pt-1">
-              <span className="font-mono font-bold text-slate-800">
-                07:00 — 16:00
-              </span>
-              <span className="text-slate-500">ساعت کاری:</span>
-            </div>
+
+            {isShiftCompleted ? (
+              <div className="space-y-1.5 pt-1 text-xs">
+                <div className="flex items-center justify-between text-slate-700 bg-emerald-100/70 p-2.5 rounded-2xl border border-emerald-200">
+                  <span className="text-slate-600 font-medium">ساعات تردد ثبت‌شده:</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    ورود {todayRecord?.checkInTime} ⟵ خروج {todayRecord?.checkOutTime}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-slate-700 bg-white p-2.5 rounded-2xl border border-slate-200">
+                  <span className="text-slate-600 font-medium">مدت کارکرد واقعی محاسبه‌شده:</span>
+                  <span className="font-bold text-emerald-700 font-mono">
+                    {Math.floor((todayRecord?.workDurationMinutes || 0) / 60)} ساعت و {(todayRecord?.workDurationMinutes || 0) % 60} دقیقه
+                  </span>
+                </div>
+                {todayRecord?.earlyExitMinutes && todayRecord.earlyExitMinutes > 0 ? (
+                  <div className="flex items-center justify-between text-amber-900 bg-amber-50 p-2.5 rounded-2xl border border-amber-200 text-[11px] font-semibold">
+                    <span>خروج زودهنگام (تعجیل قبل از پایان شیفت):</span>
+                    <span className="font-mono font-bold text-amber-800">
+                      {Math.floor(todayRecord.earlyExitMinutes / 60)} ساعت و {todayRecord.earlyExitMinutes % 60} دقیقه
+                    </span>
+                  </div>
+                ) : null}
+                {todayRecord?.overtimeMinutes && todayRecord.overtimeMinutes > 0 ? (
+                  <div className="flex items-center justify-between text-indigo-900 bg-indigo-50 p-2.5 rounded-2xl border border-indigo-200 text-[11px] font-semibold">
+                    <span>اضافه‌کاری امروز:</span>
+                    <span className="font-mono font-bold text-indigo-700">
+                      +{Math.floor(todayRecord.overtimeMinutes / 60)} ساعت و {todayRecord.overtimeMinutes % 60} دقیقه
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            ) : isClockedIn ? (
+              <div className="text-xs text-slate-600 flex items-center justify-between pt-1">
+                <span className="font-mono font-bold text-slate-800">
+                  {shift?.startTime || '07:00'} الی {shift?.endTime || '16:00'}
+                </span>
+                <span className="text-slate-500">شیفت کاری مقرر کارگاه:</span>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-600 flex items-center justify-between pt-1">
+                <span className="font-mono font-bold text-slate-800">
+                  {shift?.startTime || '07:00'} الی {shift?.endTime || '16:00'}
+                </span>
+                <span className="text-slate-500">ساعت کاری شیفت:</span>
+              </div>
+            )}
           </div>
 
           {/* Primary Action Button (Big Green Button in Image 3) */}

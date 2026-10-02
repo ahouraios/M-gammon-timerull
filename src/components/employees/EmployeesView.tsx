@@ -1633,8 +1633,8 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                         );
                       })}
                     </div>
-                    <div className="text-[10px] text-slate-400 bg-white p-2 rounded-lg border border-slate-200">
-                      🛡️ <strong>نکته امنیتی:</strong> اختیارات فوق فقط شامل امور عملیاتی بوده و دسترسی به تنظیمات اصلی سیستم، پنل پیامک واقعی و حذف پرسنل منحصراً در اختیار مدیر ارشد (مجید نورایی) است.
+                    <div className="text-[10px] text-slate-500 bg-white p-2.5 rounded-lg border border-slate-200">
+                      🛡️ <strong>سطح اختیارات امنیتی:</strong> اختیارات این بخش مربوط به امور اجرایی و عملیاتی بوده و دسترسی به تنظیمات کلان کارگاه و ارسال پیامک صرفاً در انحصار مدیریت ارشد کارگاه است.
                     </div>
                   </div>
                 </div>
@@ -1798,7 +1798,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                 </div>
 
                 <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-[11px] text-amber-900 leading-relaxed">
-                  🛡️ <strong>تفکیک دسترسی مدیریت اصلی:</strong> بالاترین سطح اختیارات بالا به اندازه مدیریت اصلی نیست. تنظیمات کلان سرور، پنل پیامک و حذف نهایی پرونده‌ها صرفاً در انحصار مدیر اصلی (مجید نورایی) است.
+                  🛡️ <strong>تفکیک دسترسی مدیریت ارشد:</strong> اختیارات این بخش صرفاً ناظر بر امور روزمره کارگاه است. تنظیمات کلان سامانه، اتصال درگاه پیامک و حذف پرونده‌ها صرفاً در انحصار حساب مدیریت ارشد کارگاه است.
                 </div>
               </div>
             </div>

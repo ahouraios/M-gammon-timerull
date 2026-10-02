@@ -223,7 +223,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">
               <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
               <span>
-                درگاه پیامک واقعی:{' '}
+                درگاه پیامک متصل:{' '}
                 {
                   settings.smsProvider === 'IPPANEL_FARAZ' ? 'فراز اس‌ام‌اس / IPPanel' :
                   settings.smsProvider === 'MELIPAYAMAK' ? 'ملی‌پیامک' :
@@ -271,7 +271,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({
               <div className="flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                 <span>
-                  برای ارسال پیامک واقعی به تلفن همراه پرسنل، اطلاعات پنل پیامکی خود را در صفحه تنظیمات وارد نمایید.
+                  برای ارسال مستقیم پیامک به تلفن همراه پرسنل، اطلاعات پنل پیامکی خود را در صفحه تنظیمات وارد نمایید.
                 </span>
               </div>
               {onNavigate && (

@@ -337,7 +337,7 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
               <h3 className="font-bold text-sm lg:text-base text-slate-800 flex items-center gap-2">
                 <Smartphone className="w-4 h-4 text-indigo-600" />
-                <span>شبیه‌ساز اسکن گوشی همراه در {selectedWorkshop.name.split(' (')[0]}</span>
+                <span>ثبت سریع تردد در {selectedWorkshop.name.split(' (')[0]}</span>
               </h3>
               <span className="text-xs text-slate-400 font-medium">
                 زمان فعلی: {getCurrentTimeStr()}
@@ -478,7 +478,7 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
                 {/* GPS Options: Real GPS button + Presets strictly around 20m */}
                 <div className="pt-2 border-t border-slate-200 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-slate-600">تست شبیه‌ساز مکانی:</span>
+                    <span className="text-[11px] font-semibold text-slate-600">بررسی موقعیت مکانی:</span>
                     <button
                       type="button"
                       onClick={handleGetRealGps}
@@ -486,7 +486,7 @@ export const DynamicQrKioskView: React.FC<DynamicQrKioskViewProps> = ({
                       className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                     >
                       <Navigation className="w-3 h-3" />
-                      <span>{isGettingRealGps ? 'دریافت GPS...' : 'خواندن GPS واقعی گوشی'}</span>
+                      <span>{isGettingRealGps ? 'دریافت GPS...' : 'خواندن GPS دستگاه'}</span>
                     </button>
                   </div>
 

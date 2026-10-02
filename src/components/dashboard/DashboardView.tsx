@@ -17,6 +17,15 @@ import {
   Headphones,
   CheckCircle2,
   Sparkles,
+  Receipt,
+  PlusCircle,
+  CreditCard,
+  FileSpreadsheet,
+  Settings as SettingsIcon,
+  DollarSign,
+  X,
+  Wallet,
+  UserPlus,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -38,6 +47,9 @@ import {
 import {
   formatNumberFa,
   getTodayShamsiDetailed,
+  formatCurrencyTomans,
+  PERSIAN_WEEKDAYS,
+  gregorianToJalali,
 } from '../../utils/dateUtils';
 import { NavTab } from '../common/Sidebar';
 import { StorageService } from '../../services/storage';
@@ -64,6 +76,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const shamsi = getTodayShamsiDetailed();
   const [timeStr, setTimeStr] = useState('');
+  const [isQuickRequestModalOpen, setIsQuickRequestModalOpen] = useState(false);
   const [bannerUrl, setBannerUrl] = useState<string>(() => {
     const s = StorageService.getSettings();
     return s.dashboardBannerUrl || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1600&q=80';
@@ -134,19 +147,48 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Pending alerts
   const pendingLeaves = leaves.filter((l) => l.status === 'PENDING');
   const pendingAdvances = advances.filter((a) => a.status === 'PENDING');
+  const allExpenses = StorageService.getAllExpensesRaw();
+  const pendingExpenses = allExpenses.filter((e) => e.status === 'PENDING_SETTLEMENT');
+  const totalPendingExpenseAmount = pendingExpenses.reduce((sum, e) => sum + e.amount, 0);
+
   const notCheckedOutEmployees = todayAttendance.filter(
     (a) => a.checkInTime && !a.checkOutTime
   );
   const pendingPayroll = salaries.filter((s) => s.status !== 'PAID');
-  const totalAlertsCount = pendingLeaves.length + pendingAdvances.length + notCheckedOutEmployees.length + (pendingPayroll.length > 0 ? 1 : 0);
+  const totalAlertsCount =
+    pendingLeaves.length +
+    pendingAdvances.length +
+    pendingExpenses.length +
+    notCheckedOutEmployees.length +
+    (pendingPayroll.length > 0 ? 1 : 0);
 
-  // Weekly attendance chart data (dynamic from actual data, Saturday to Friday)
-  const daysOfWeek = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
-  const weeklyAttendanceData = daysOfWeek.map((day) => {
-    if (day === shamsi.dayOfWeek) {
-      return { day, حاضر: presentCount, تاخیر: lateCount, غایب: absentCount };
-    }
-    return { day, حاضر: totalEmployees > 0 ? totalEmployees : 0, تاخیر: 0, غایب: 0 };
+  // Weekly attendance chart data (dynamic from actual data strictly for current week)
+  const todayWeekdayIdx = PERSIAN_WEEKDAYS.indexOf(shamsi.dayOfWeek);
+  const effectiveTodayIdx = todayWeekdayIdx >= 0 ? todayWeekdayIdx : 0;
+
+  const weeklyAttendanceData = PERSIAN_WEEKDAYS.map((day, idx) => {
+    const dayOffset = idx - effectiveTodayIdx;
+    const d = new Date();
+    d.setDate(d.getDate() + dayOffset);
+    const [jy, jm, jd] = gregorianToJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    const dayDateSlash = `${jy}/${jm < 10 ? '0' : ''}${jm}/${jd < 10 ? '0' : ''}${jd}`;
+    const dayDateDash = `${jy}-${jm < 10 ? '0' : ''}${jm}-${jd < 10 ? '0' : ''}${jd}`;
+
+    const dayAtt = attendance.filter((a) => a.date === dayDateSlash || a.date === dayDateDash);
+    const present = dayAtt.filter(
+      (a) => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'EARLY_LEAVE'
+    ).length;
+    const late = dayAtt.filter(
+      (a) => a.status === 'LATE' || (a.lateMinutes && a.lateMinutes > 0)
+    ).length;
+    const absent = dayAtt.filter((a) => a.status === 'ABSENT').length;
+
+    return {
+      day,
+      حاضر: present,
+      تاخیر: late,
+      غایب: absent,
+    };
   });
 
   return (
@@ -158,8 +200,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* Panoramic Scenic Hero Banner (Exact match with Image 2) */}
-      <div className="relative rounded-3xl overflow-hidden shadow-md border border-slate-200/80 min-h-[160px] sm:min-h-[180px] flex flex-col justify-between p-5 sm:p-7 text-white">
+      {/* Panoramic Scenic Hero Banner */}
+      <div className="relative rounded-3xl overflow-hidden shadow-md border border-slate-200/80 min-h-[140px] sm:min-h-[160px] flex flex-col justify-between p-5 sm:p-7 text-white">
         {/* Background Image with Dark Vignette Overlay */}
         <div
           className="absolute inset-0 bg-cover bg-center transition-all duration-500"
@@ -199,22 +241,129 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </label>
         </div>
 
-        {/* Action Buttons inside Hero Banner (Exact match with Image 2) */}
-        <div className="relative z-10 flex items-center gap-2.5 pt-4 flex-wrap">
+        {/* Banner Footer Note */}
+        <div className="relative z-10 flex items-center justify-between text-[11px] text-slate-300 font-medium pt-2">
+          <span>کارگاه صنایع چوب و تخته‌نرد ام.گامان • توس ۱۴۲</span>
+          <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono text-[10px]">
+            سیستم فعال
+          </span>
+        </div>
+      </div>
+
+      {/* Quick Access & Frequent Actions Bar */}
+      <div className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/90 shadow-2xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+            <h3 className="font-extrabold text-xs sm:text-sm text-slate-900">
+              دسترسی سریع و عملیات پرکاربرد
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">میانبرهای مدیریتی</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+          {/* Quick Action 1: Submit Requests (ثبت درخواست‌ها) */}
           <button
-            onClick={() => onNavigate('qr-kiosk')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-white/90 hover:bg-white text-slate-900 transition-all shadow-md active:scale-98 cursor-pointer"
+            type="button"
+            onClick={() => setIsQuickRequestModalOpen(true)}
+            className="p-3 rounded-2xl bg-gradient-to-br from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white flex flex-col items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer group"
           >
-            <QrCode className="w-4 h-4 text-indigo-600" />
-            <span>کیوسک QR تبدیلی</span>
+            <PlusCircle className="w-5 h-5 text-indigo-200 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-black">ثبت درخواست‌ها</span>
+            <span className="text-[9px] text-indigo-200 font-medium truncate">مرخصی / مساعده</span>
           </button>
 
+          {/* Quick Action 2: Smart QR Kiosk */}
           <button
-            onClick={() => onNavigate('leaves')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-950/80 hover:bg-slate-950 text-white transition-all border border-white/25 shadow-md active:scale-98 cursor-pointer"
+            type="button"
+            onClick={() => onNavigate('qr-kiosk')}
+            className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer group"
           >
-            <CalendarCheck className="w-4 h-4 text-amber-400" />
-            <span>ثبت مرخصی</span>
+            <QrCode className="w-5 h-5 text-purple-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold">کیوسک QR</span>
+            <span className="text-[9px] text-slate-500 font-medium truncate">حضور و غیاب</span>
+          </button>
+
+          {/* Quick Action 3: Manual Attendance */}
+          <button
+            type="button"
+            onClick={() => onNavigate('attendance')}
+            className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer group"
+          >
+            <Clock className="w-5 h-5 text-emerald-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold">ثبت تردد دستی</span>
+            <span className="text-[9px] text-slate-500 font-medium truncate">ورود و خروج</span>
+          </button>
+
+          {/* Quick Action 4: Settle Personal Card Expense (تسویه فاکتور خرید کارگر) */}
+          <button
+            type="button"
+            onClick={() => onNavigate('advances')}
+            className={`p-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer relative group ${
+              pendingExpenses.length > 0
+                ? 'bg-rose-50 hover:bg-rose-100 text-rose-900 border-rose-300 ring-2 ring-rose-400/20'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200'
+            }`}
+          >
+            {pendingExpenses.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-600 text-white text-[10px] font-black rounded-full flex items-center justify-center shadow-xs animate-bounce">
+                {pendingExpenses.length}
+              </span>
+            )}
+            <Receipt className={`w-5 h-5 group-hover:scale-110 transition-transform ${
+              pendingExpenses.length > 0 ? 'text-rose-600' : 'text-blue-600'
+            }`} />
+            <span className="text-xs font-bold truncate">تسویه فاکتورها</span>
+            <span className={`text-[9px] font-medium truncate ${
+              pendingExpenses.length > 0 ? 'text-rose-700 font-bold' : 'text-slate-500'
+            }`}>
+              {pendingExpenses.length > 0 ? `${pendingExpenses.length} مورد معوق` : 'خرید شخصی کارگر'}
+            </span>
+          </button>
+
+          {/* Quick Action 5: Payroll & Advances */}
+          <button
+            type="button"
+            onClick={() => onNavigate('payroll')}
+            className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer group"
+          >
+            <DollarSign className="w-5 h-5 text-amber-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold">محاسبه حقوق</span>
+            <span className="text-[9px] text-slate-500 font-medium truncate">فیش و دستمزد</span>
+          </button>
+
+          {/* Quick Action 6: Excel Reports */}
+          <button
+            type="button"
+            onClick={() => onNavigate('reports')}
+            className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer group"
+          >
+            <FileSpreadsheet className="w-5 h-5 text-teal-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold">گزارشات و اکسل</span>
+            <span className="text-[9px] text-slate-500 font-medium truncate">خروجی آماری</span>
+          </button>
+
+          {/* Quick Action 7: Employees Management */}
+          <button
+            type="button"
+            onClick={() => onNavigate('employees')}
+            className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer group"
+          >
+            <Users className="w-5 h-5 text-sky-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold">مدیریت پرسنل</span>
+            <span className="text-[9px] text-slate-500 font-medium truncate">پرونده‌ها و شیفت</span>
+          </button>
+
+          {/* Quick Action 8: Settings */}
+          <button
+            type="button"
+            onClick={() => onNavigate('settings')}
+            className="p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 flex flex-col items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer group"
+          >
+            <SettingsIcon className="w-5 h-5 text-slate-600 group-hover:scale-110 transition-transform" />
+            <span className="text-xs font-bold">تنظیمات کارگاه</span>
+            <span className="text-[9px] text-slate-500 font-medium truncate">پیامک و شیفت</span>
           </button>
         </div>
       </div>
@@ -370,6 +519,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         <div className="space-y-2">
+          {/* High Priority Alert: Employee Personal Card Expenses Pending Settlement */}
+          {pendingExpenses.length > 0 && (
+            <div
+              onClick={() => onNavigate('advances')}
+              className="bg-rose-50/90 border border-rose-300 p-3 sm:p-4 rounded-2xl shadow-xs hover:bg-rose-100/70 transition-all flex items-center justify-between gap-3 cursor-pointer animate-in fade-in ring-1 ring-rose-400/20"
+            >
+              <span className="px-2.5 py-1.5 rounded-xl text-xs font-black bg-rose-600 text-white shadow-xs shrink-0 flex items-center gap-1">
+                <Receipt className="w-3.5 h-3.5" />
+                <span>{formatNumberFa(pendingExpenses.length)} فاکتور</span>
+              </span>
+              <div className="flex-1 text-right min-w-0">
+                <div className="text-xs sm:text-sm font-black text-rose-950 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-600 animate-ping shrink-0" />
+                  <span>تسویه هزینه خریدهای ثبت‌شده با کارت شخصی کارگران</span>
+                </div>
+                <div className="text-[11px] text-rose-800 mt-1 truncate font-medium">
+                  {pendingExpenses[0].employeeName}: {pendingExpenses[0].title} ({formatCurrencyTomans(pendingExpenses[0].amount)})
+                  {pendingExpenses.length > 1 ? ` • و ${formatNumberFa(pendingExpenses.length - 1)} فاکتور دیگر در انتظار تایید` : ' • نیازمند بررسی و واریز به حساب'}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 text-xs font-bold text-rose-700 shrink-0 bg-white/90 px-3 py-1.5 rounded-xl border border-rose-200 shadow-2xs hover:bg-white">
+                <span>تسویه فوری</span>
+                <ChevronLeft className="w-4 h-4 text-rose-600" />
+              </div>
+            </div>
+          )}
+
           {/* Row 1: New Pending Requests */}
           <div
             onClick={() => onNavigate('leaves')}
@@ -508,6 +684,101 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <span className="w-2 h-2 rounded-full bg-emerald-500" />
         </div>
       </div>
+
+      {/* Quick Request Registration Modal for Manager */}
+      {isQuickRequestModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <button
+                type="button"
+                onClick={() => setIsQuickRequestModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <h3 className="font-extrabold text-sm sm:text-base text-slate-800 flex items-center gap-2">
+                <span>ثبت سریع درخواست‌ها و عملیات پرسنلی</span>
+                <PlusCircle className="w-5 h-5 text-indigo-600" />
+              </h3>
+            </div>
+
+            <p className="text-xs text-slate-500 font-medium">
+              نوع درخواست یا عملیاتی که مایلید برای پرسنل کارگاه ثبت یا پیگیری کنید را انتخاب نمایید:
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickRequestModalOpen(false);
+                  onNavigate('leaves');
+                }}
+                className="p-3.5 rounded-2xl bg-amber-50 hover:bg-amber-100/80 border border-amber-200 text-right transition-all cursor-pointer group flex items-start gap-3"
+              >
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                  <CalendarCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-amber-950">ثبت مرخصی پرسنل</h4>
+                  <p className="text-[11px] text-amber-800/90 mt-0.5">مرخصی استحقاقی، استعلاجی یا ساعتی</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickRequestModalOpen(false);
+                  onNavigate('advances');
+                }}
+                className="p-3.5 rounded-2xl bg-blue-50 hover:bg-blue-100/80 border border-blue-200 text-right transition-all cursor-pointer group flex items-start gap-3"
+              >
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                  <Wallet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-blue-950">ثبت مساعده مالی</h4>
+                  <p className="text-[11px] text-blue-800/90 mt-0.5">درخواست یا پرداخت مساعده بین‌ماه</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickRequestModalOpen(false);
+                  onNavigate('advances');
+                }}
+                className="p-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100/80 border border-rose-200 text-right transition-all cursor-pointer group flex items-start gap-3"
+              >
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-rose-950">تسویه خرید شخصی کارگر</h4>
+                  <p className="text-[11px] text-rose-800/90 mt-0.5">فاکتورها و هزینه‌های شخصی برای کارگاه</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQuickRequestModalOpen(false);
+                  onNavigate('attendance');
+                }}
+                className="p-3.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-right transition-all cursor-pointer group flex items-start gap-3"
+              >
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-emerald-950">ثبت تردد دستی</h4>
+                  <p className="text-[11px] text-emerald-800/90 mt-0.5">ثبت دستی ورود و خروج یا ماموریت روزانه</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
