@@ -342,6 +342,8 @@ export interface AuditLog {
 }
 
 export type SmsProvider = 'KAVENEGAR' | 'IPPANEL_FARAZ' | 'MELIPAYAMAK' | 'GHASEDAK' | 'SMS_IR' | 'CUSTOM';
+export type SmsConnectionMode = 'legacy_rest' | 'new_api';
+export type SmsConnectionStatus = 'UNKNOWN' | 'CHECKING' | 'SUCCESS' | 'INVALID_CREDENTIALS' | 'INVALID_SENDER' | 'INSUFFICIENT_CREDIT' | 'SERVICE_ERROR' | 'NETWORK_ERROR' | 'FAILED';
 
 export interface CompanySettings {
   id: string;
@@ -359,12 +361,28 @@ export interface CompanySettings {
   // سامانه و پنل ارسال پیامک واقعی
   smsEnabled?: boolean;
   smsProvider?: SmsProvider;
-  smsApiKey?: string;
+  smsConnectionMode?: SmsConnectionMode;
   smsSenderNumber?: string;
   smsUsername?: string;
   smsPassword?: string;
+  smsApiKey?: string;
+  smsNewApiEndpoint?: string;
+  smsNewApiToken?: string;
   smsPatternCode?: string;
   smsCustomEndpoint?: string;
+  // Security masking flags
+  hasSmsPassword?: boolean;
+  hasSmsApiKey?: boolean;
+  hasSmsNewApiToken?: boolean;
+  // Connection & Test Status History
+  smsLastConnectionCheck?: string | null;
+  smsLastConnectionStatus?: SmsConnectionStatus;
+  smsLastConnectionMessage?: string;
+  smsLastBalance?: string | number | null;
+  smsLastTestAt?: string | null;
+  smsLastTestStatus?: 'UNKNOWN' | 'SUCCESS' | 'FAILED';
+  smsLastTestTrackingCode?: string | null;
+  smsLastTestRecipient?: string | null;
   qrRefreshIntervalSeconds: number;
   // 1. تنظیمات شیفت
   defaultWorkStartTime: string;

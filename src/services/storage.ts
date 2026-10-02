@@ -2305,6 +2305,27 @@ export class StorageService {
     return getItem<CompanySettings>(STORAGE_KEYS.SETTINGS, initialCompanySettings);
   }
 
+  static async fetchSettingsAsync(): Promise<CompanySettings | null> {
+    const token = this.getAuthToken();
+    try {
+      const res = await fetch('/api/settings', {
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.companyName) {
+          setItem(STORAGE_KEYS.SETTINGS, data);
+          return data;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return this.getSettings();
+  }
+
   static async saveSettingsAsync(settings: CompanySettings): Promise<{ success: boolean; message: string; settings?: CompanySettings }> {
     setItem(STORAGE_KEYS.SETTINGS, settings);
     const token = this.getAuthToken();
@@ -2550,7 +2571,13 @@ export class StorageService {
   }
 
   // Test Real SMS Connection to Gateway
-  static async testSmsAsync(recipientPhone: string, testMessage?: string, config?: any): Promise<{ success: boolean; message: string; results?: any }> {
+  static async testSmsAsync(recipientPhone: string, testMessage?: string, config?: any): Promise<{
+    success: boolean;
+    message: string;
+    trackingCode?: string;
+    results?: any;
+    statusCode?: string;
+  }> {
     const token = this.getAuthToken();
     try {
       const res = await fetch('/api/sms/test', {
@@ -2561,7 +2588,9 @@ export class StorageService {
         },
         body: JSON.stringify({ recipientPhone, testMessage, config })
       });
-      return await res.json();
+      const data = await res.json();
+      this.fetchSettingsAsync().catch(() => {});
+      return data;
     } catch (err: any) {
       return { success: false, message: `خطا در برقراری ارتباط با سرور: ${err.message}` };
     }
@@ -2573,6 +2602,7 @@ export class StorageService {
     message: string;
     balance?: string | number;
     provider?: string;
+    statusCode?: string;
     details?: any;
   }> {
     const token = this.getAuthToken();
@@ -2585,7 +2615,9 @@ export class StorageService {
         },
         body: JSON.stringify({ config })
       });
-      return await res.json();
+      const data = await res.json();
+      this.fetchSettingsAsync().catch(() => {});
+      return data;
     } catch (err: any) {
       return { success: false, message: `خطا در ارتباط با سرور: ${err.message}` };
     }

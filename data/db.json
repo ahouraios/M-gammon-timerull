@@ -56,7 +56,15 @@
       "مدیر داخلی",
       "مسئول فنی",
       "نیروی کارگاهی"
-    ]
+    ],
+    "smsConnectionMode": "legacy_rest",
+    "smsLastConnectionCheck": "2026-10-02T19:54:13.772Z",
+    "smsLastConnectionStatus": "INVALID_CREDENTIALS",
+    "smsLastConnectionMessage": "نام کاربری و کلمه عبور ملی‌پیامک (روش REST قدیمی) وارد نشده است.",
+    "smsLastTestAt": "2026-10-02T20:24:04.199Z",
+    "smsLastTestStatus": "SUCCESS",
+    "smsLastTestTrackingCode": "5522624032138192819",
+    "smsLastTestRecipient": "09025019460"
   },
   "shifts": [
     {
@@ -119,9 +127,67 @@
   "attendance": [],
   "leaves": [],
   "advances": [],
+  "expenses": [],
+  "miscPayments": [],
+  "missions": [],
   "salaries": [],
   "bonusesPenalties": [],
   "auditLogs": [
+    {
+      "id": "log_1790972644200_9sxq",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "تست ارسال پیامک",
+      "resource": "درگاه پیامک",
+      "details": "تست ارسال پیامک به شماره 0902***9460: موفق",
+      "timestamp": "2026-10-02T20:24:04.200Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log_1790972636873_9i1j",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود به سامانه",
+      "resource": "احراز هویت",
+      "details": "ورود موفق از طریق نام کاربری: admin",
+      "timestamp": "2026-10-02T20:23:56.873Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log_1790970856635_gejf",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "تست ارسال پیامک",
+      "resource": "درگاه پیامک",
+      "details": "تست ارسال پیامک به شماره 0915***1111: ناموفق",
+      "timestamp": "2026-10-02T19:54:16.635Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log_1790970841769_rz38",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود به سامانه",
+      "resource": "احراز هویت",
+      "details": "ورود موفق از طریق نام کاربری: admin",
+      "timestamp": "2026-10-02T19:54:01.769Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log_1790970279284_5z9r",
+      "companyId": "comp_mgommon_01",
+      "userId": "usr_admin",
+      "userName": "مجید نورایی (مالک و مدیر ارشد)",
+      "action": "ورود به سامانه",
+      "resource": "احراز هویت",
+      "details": "ورود موفق از طریق نام کاربری: admin",
+      "timestamp": "2026-10-02T19:44:39.284Z",
+      "ipAddress": "127.0.0.1"
+    },
     {
       "id": "log_1790763655349_0iej",
       "companyId": "comp_mgommon_01",
@@ -219,10 +285,22 @@
       "expiresAt": 1793355607088,
       "rememberMe": true
     },
-    "mg_sess_2cb47fe40918542f3072fb482ba1eef21275aa3c3ce977dc077459b47e2c5a2e": {
+    "mg_sess_2beda149f22c0000f57ee289693a9175bfcffc2a04d04f9b859a78dd08fb3e64": {
       "userId": "usr_admin",
-      "createdAt": 1790763655348,
-      "expiresAt": 1790850055348,
+      "createdAt": 1790970279284,
+      "expiresAt": 1793562279284,
+      "rememberMe": true
+    },
+    "mg_sess_c10ab7296b93a69e8d0bca0958406cb4b366b9a5473325314485a765d9634177": {
+      "userId": "usr_admin",
+      "createdAt": 1790970841769,
+      "expiresAt": 1791057241769,
+      "rememberMe": false
+    },
+    "mg_sess_da41739dc295ccdb12db5580222fef4ef09f69ede903fbf199a654bea4043736": {
+      "userId": "usr_admin",
+      "createdAt": 1790972636873,
+      "expiresAt": 1791059036873,
       "rememberMe": false
     }
   },

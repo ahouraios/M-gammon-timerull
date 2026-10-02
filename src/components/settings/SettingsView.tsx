@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Settings,
   Building2,
@@ -27,9 +27,15 @@ import {
   Key,
   ExternalLink,
   Info,
-  Check
+  Check,
+  Radio,
+  Lock,
+  Smartphone,
+  CheckCircle2,
+  ShieldCheck,
+  Server
 } from 'lucide-react';
-import { CompanySettings, AuditLog, Workshop, User, SmsProvider } from '../../types';
+import { CompanySettings, AuditLog, Workshop, User, SmsProvider, SmsConnectionMode, SmsConnectionStatus } from '../../types';
 import { StorageService } from '../../services/storage';
 import { DeveloperBadge } from '../common/DeveloperBadge';
 
@@ -54,12 +60,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // SMS Settings & Live Testing State
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showToken, setShowToken] = useState(false);
   const [testPhone, setTestPhone] = useState(currentUser?.phone || '');
-  const [testMessage, setTestMessage] = useState('تست اتصال و ارسال پیامک از سامانه M.GAMMON');
+  const [testMessage, setTestMessage] = useState('تست اتصال و ارسال پیامک از سامانه کارگاه گامون');
   const [isTestingSms, setIsTestingSms] = useState(false);
-  const [testSmsResult, setTestSmsResult] = useState<{ success: boolean; message: string; results?: any } | null>(null);
+  const [testSmsResult, setTestSmsResult] = useState<{ success: boolean; message: string; trackingCode?: string; results?: any; statusCode?: string } | null>(null);
   const [isCheckingBalance, setIsCheckingBalance] = useState(false);
-  const [balanceResult, setBalanceResult] = useState<{ success: boolean; message: string; balance?: string | number; provider?: string; details?: any } | null>(null);
+  const [balanceResult, setBalanceResult] = useState<{ success: boolean; message: string; balance?: string | number; availableLines?: string[]; provider?: string; statusCode?: string; details?: any } | null>(null);
+  const [availableLines, setAvailableLines] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
   const [formData, setFormData] = useState<CompanySettings>({
@@ -69,11 +78,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     logoUrl: settings.logoUrl || '',
     allowedGpsRadiusMeters: settings.allowedGpsRadiusMeters || 20,
     smsEnabled: settings.smsEnabled ?? false,
-    smsProvider: settings.smsProvider || 'KAVENEGAR',
+    smsProvider: settings.smsProvider || 'MELIPAYAMAK',
+    smsConnectionMode: settings.smsConnectionMode || 'legacy_rest',
     smsApiKey: settings.smsApiKey || '',
     smsSenderNumber: settings.smsSenderNumber || '',
     smsUsername: settings.smsUsername || '',
     smsPassword: settings.smsPassword || '',
+    smsNewApiEndpoint: settings.smsNewApiEndpoint || '',
+    smsNewApiToken: settings.smsNewApiToken || '',
     smsPatternCode: settings.smsPatternCode || '',
     smsCustomEndpoint: settings.smsCustomEndpoint || '',
     defaultWorkStartTime: settings.defaultWorkStartTime || '07:00',
@@ -116,6 +128,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
     ]
   });
+
+  useEffect(() => {
+    StorageService.fetchSettingsAsync().then((remote) => {
+      if (remote) {
+        setFormData((prev) => ({
+          ...prev,
+          ...remote,
+          smsProvider: remote.smsProvider || prev.smsProvider || 'MELIPAYAMAK',
+          smsConnectionMode: remote.smsConnectionMode || prev.smsConnectionMode || 'legacy_rest'
+        }));
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    setFormData((prev) => ({
+      ...prev,
+      ...settings,
+      smsProvider: settings.smsProvider || prev.smsProvider || 'MELIPAYAMAK',
+      smsConnectionMode: settings.smsConnectionMode || prev.smsConnectionMode || 'legacy_rest'
+    }));
+  }, [settings]);
 
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [backupStatus, setBackupStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -176,8 +210,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setIsCheckingBalance(true);
     setBalanceResult(null);
     try {
-      const res = await StorageService.checkSmsBalanceAsync(formData);
+      const res: any = await StorageService.checkSmsBalanceAsync(formData);
       setBalanceResult(res);
+      if (res.availableLines && Array.isArray(res.availableLines) && res.availableLines.length > 0) {
+        setAvailableLines(res.availableLines);
+      }
+      if (res.success) {
+        setFormData((prev) => ({
+          ...prev,
+          smsSenderNumber: (res.availableLines && res.availableLines.length > 0 && (!prev.smsSenderNumber || !res.availableLines.includes(prev.smsSenderNumber)))
+            ? res.availableLines[0]
+            : prev.smsSenderNumber,
+          smsLastConnectionCheck: new Date().toISOString(),
+          smsLastConnectionStatus: 'SUCCESS',
+          smsLastConnectionMessage: res.message,
+          smsLastBalance: res.balance ?? prev.smsLastBalance
+        }));
+      } else {
+        setFormData((prev) => ({
+          ...prev,
+          smsLastConnectionCheck: new Date().toISOString(),
+          smsLastConnectionStatus: (res.statusCode as any) || 'FAILED',
+          smsLastConnectionMessage: res.message
+        }));
+      }
     } catch (e: any) {
       setBalanceResult({ success: false, message: e.message || 'خطا در استعلام از درگاه وب‌سرویس پیامک.' });
     } finally {
@@ -186,24 +242,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleTestSms = async () => {
-    if (!testPhone.trim()) {
+    const cleanPhone = testPhone.trim();
+    if (!cleanPhone) {
       setTestSmsResult({ success: false, message: 'لطفاً شماره تلفن همراه گیرنده را برای تست وارد نمایید.' });
       return;
     }
     setIsTestingSms(true);
     setTestSmsResult(null);
     try {
-      const res = await StorageService.testSmsAsync(testPhone.trim(), testMessage, {
-        smsEnabled: formData.smsEnabled,
-        smsProvider: formData.smsProvider,
-        smsApiKey: formData.smsApiKey,
-        smsSenderNumber: formData.smsSenderNumber,
-        smsUsername: formData.smsUsername,
-        smsPassword: formData.smsPassword,
-        smsPatternCode: formData.smsPatternCode,
-        smsCustomEndpoint: formData.smsCustomEndpoint
-      });
+      const res = await StorageService.testSmsAsync(cleanPhone, testMessage, formData);
       setTestSmsResult(res);
+      if (res.success) {
+        setFormData((prev) => ({
+          ...prev,
+          smsLastTestAt: new Date().toISOString(),
+          smsLastTestStatus: 'SUCCESS',
+          smsLastTestTrackingCode: res.trackingCode || null,
+          smsLastTestRecipient: cleanPhone
+        }));
+      } else {
+        setFormData((prev) => ({
+          ...prev,
+          smsLastTestAt: new Date().toISOString(),
+          smsLastTestStatus: 'FAILED',
+          smsLastTestRecipient: cleanPhone
+        }));
+      }
     } catch (e: any) {
       setTestSmsResult({ success: false, message: e.message || 'خطا در برقراری ارتباط با وب‌سرویس پیامک.' });
     } finally {
@@ -783,21 +847,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* Section 7: Real SMS Gateway & Live Testing */}
+          {/* Section 7: Real SMS Gateway & Live Testing (Melipayamak Upgrade & UI Overhaul) */}
           <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-6">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
+            {/* Header & Main Toggle */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 flex-wrap gap-3">
               <div className="space-y-0.5">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-indigo-600" />
-                  <span>سامانه اطلاع‌رسانی و ارسال پیامک به پرسنل</span>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-indigo-600" />
+                  <span>سامانه اطلاع‌رسانی و ارسال پیامک</span>
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  تنظیمات خط و درگاه پیامکی جهت ارسال خودکار اعلان‌های ورود و خروج، پیام‌ها و اطلاعیه‌ها به شماره همراه پرسنل
+                  اتصال امن سامانه به پنل پیامکی برای ارسال اعلان‌های پرسنلی، پیام‌ها و کدهای تایید هویت
                 </p>
               </div>
 
               {/* SMS Enable/Disable Toggle */}
-              <label className="flex items-center gap-2 cursor-pointer select-none">
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
                 <span className="text-xs font-semibold text-slate-700">ارسال خودکار پیامک:</span>
                 <input
                   type="checkbox"
@@ -807,9 +872,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-600 cursor-pointer accent-indigo-600"
                 />
                 <span
-                  className={`text-xs px-3 py-1 rounded-full font-bold flex items-center gap-1 ${
+                  className={`text-xs px-3 py-1 rounded-full font-bold flex items-center gap-1.5 transition-all ${
                     formData.smsEnabled
-                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs'
                       : 'bg-slate-100 text-slate-500 border border-slate-200'
                   }`}
                 >
@@ -826,7 +891,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Provider Selection */}
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-bold text-slate-700">
                   انتخاب سامانه و درگاه پیامکی طرف قرارداد شما
@@ -837,14 +902,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
                 {[
+                  { id: 'MELIPAYAMAK', title: 'ملی‌پیامک', subtitle: 'Melipayamak', desc: 'پشتیبانی از REST قدیمی و API جدید', badge: 'پیش‌فرض کارگاه' },
                   { id: 'KAVENEGAR', title: 'کاوه‌نگار', subtitle: 'Kavenegar', desc: 'ارسال آنی پیامک و تایید هویت', badge: 'رسمی' },
-                  { id: 'IPPANEL_FARAZ', title: 'فراز اس‌ام‌اس', subtitle: 'IPPanel / فراز', desc: 'ارسال با خط خدماتی و پترن', badge: 'محبوب' },
-                  { id: 'MELIPAYAMAK', title: 'ملی‌پیامک', subtitle: 'Melipayamak', desc: 'ارسال شرکتی با شناسه حساب', badge: 'رسمی' },
+                  { id: 'IPPANEL_FARAZ', title: 'فراز اس‌ام‌اس', subtitle: 'Faraz / IPPanel', desc: 'ارسال با خط خدماتی و پترن', badge: 'محبوب' },
                   { id: 'GHASEDAK', title: 'قاصدک', subtitle: 'Ghasedak', desc: 'ارسال سریع پیامک به پرسنل', badge: 'رسمی' },
                   { id: 'SMS_IR', title: 'SMS.ir', subtitle: 'سامانه SMS.ir', desc: 'ارسال سازمانی با خط خدماتی', badge: 'رسمی' },
-                  { id: 'CUSTOM', title: 'سامانه دلخواه', subtitle: 'سایر درگاه‌ها', desc: 'اتصال به سامانه پیامکی دیگر', badge: 'سفارشی' },
+                  { id: 'CUSTOM', title: 'سامانه دلخواه', subtitle: 'Custom REST', desc: 'اتصال به وب‌سرویس سفارشی', badge: 'سفارشی' },
                 ].map((item) => {
-                  const isSelected = (formData.smsProvider || 'KAVENEGAR') === item.id;
+                  const isSelected = (formData.smsProvider || 'MELIPAYAMAK') === item.id;
                   return (
                     <button
                       key={item.id}
@@ -853,16 +918,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onClick={() => setFormData({ ...formData, smsProvider: item.id as any })}
                       className={`p-3 rounded-xl border text-right transition-all cursor-pointer flex flex-col justify-between relative ${
                         isSelected
-                          ? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 font-bold ring-2 ring-indigo-500/20 shadow-xs'
-                          : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100 text-slate-700 font-medium'
+                          ? 'border-indigo-600 bg-indigo-50/90 text-indigo-950 font-bold ring-2 ring-indigo-500/20 shadow-xs'
+                          : 'border-slate-200/90 bg-slate-50/50 hover:bg-slate-100/80 text-slate-700 font-medium'
                       }`}
                     >
                       <div className="flex items-center justify-between w-full mb-1">
                         <span className="text-xs font-bold">{item.title}</span>
-                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
-                          isSelected ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-200/70 text-slate-600'
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                          isSelected ? 'bg-emerald-600 text-white' : 'bg-slate-200/70 text-slate-600'
                         }`}>
-                          {item.badge}
+                          {isSelected ? '✓ فعال' : item.badge}
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 block font-normal font-sans" dir="ltr">{item.subtitle}</span>
@@ -873,229 +938,509 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
 
-            {/* Provider Dynamic Guide Note */}
-            <div className="p-3.5 bg-indigo-50/60 rounded-xl border border-indigo-100 text-xs text-indigo-900 flex items-start gap-2.5">
-              <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <span className="font-bold block">
-                  راهنمای اتصال به پنل{' '}
-                  {formData.smsProvider === 'KAVENEGAR' ? 'کاوه‌نگار (Kavenegar)' :
-                   formData.smsProvider === 'IPPANEL_FARAZ' ? 'فراز اس‌ام‌اس / آی‌پی‌پنل (FarazSMS / IPPanel)' :
-                   formData.smsProvider === 'MELIPAYAMAK' ? 'ملی‌پیامک (Melipayamak)' :
-                   formData.smsProvider === 'GHASEDAK' ? 'قاصدک (Ghasedak)' :
-                   formData.smsProvider === 'SMS_IR' ? 'سامانه SMS.ir' : 'وب‌سرویس اختصاصی'}
-                </span>
-                <p className="text-[11px] text-indigo-800 leading-relaxed font-normal">
-                  {formData.smsProvider === 'KAVENEGAR' && 'کلید اتصال پیامک را از منوی کاربری «حساب کاربری > مشخصات حساب» در پنل کاوه‌نگار کپی نمایید. شماره فرستنده نیز شماره خط پیامکی کارگاه شما در کاوه‌نگار می‌باشد. در صورت فعال بودن خط خدماتی، پیامک‌ها به صورت آنی به کلیه پرسنل تحویل داده می‌شوند.'}
-                  {formData.smsProvider === 'IPPANEL_FARAZ' && 'کلید اتصال را از بخش وب‌سرویس در پنل فراز اس‌ام‌اس دریافت کنید. شماره خط فرستنده کارگاه (مثلاً ۳۰۰۰... یا ۵۰۰۰...) را در فیلد شماره فرستنده وارد نمایید.'}
-                  {formData.smsProvider === 'MELIPAYAMAK' && 'نام کاربری و کلمه عبور ورود به پرتال ملی‌پیامک خود را در کادرهای زیر وارد کنید. همچنین شماره خط فرستنده تایید شده در بخش شماره‌های اختصاصی ملی‌پیامک را درج نمایید.'}
-                  {formData.smsProvider === 'GHASEDAK' && 'کلید اتصال را از پنل کاربری قاصدک کپی نموده و شماره خط پیامکی کارگاه را ثبت کنید.'}
-                  {formData.smsProvider === 'SMS_IR' && 'کلید اتصال را از داشبورد کاربری سامانه SMS.ir کپی کرده و شماره خط فرستنده را در فیلد مربوطه قرار دهید.'}
-                  {formData.smsProvider === 'CUSTOM' && 'آدرس اینترنتی سامانه پیامکی مورد نظر خود را وارد کنید. سیستم به صورت خودکار پیامک‌ها را از این مسیر ارسال خواهد کرد.'}
-                </p>
-              </div>
-            </div>
-
-            {/* Provider Configuration Fields */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* API Key (for providers requiring it) */}
-              {formData.smsProvider !== 'MELIPAYAMAK' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>کلید اختصاصی اتصال سامانه پیامک</span>
-                    <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showApiKey ? 'text' : 'password'}
-                      disabled={!canEdit}
-                      value={formData.smsApiKey || ''}
-                      onChange={(e) => setFormData({ ...formData, smsApiKey: e.target.value })}
-                      placeholder={
-                        formData.smsProvider === 'KAVENEGAR' ? 'کد کلید اتصال کاوه‌نگار' :
-                        formData.smsProvider === 'IPPANEL_FARAZ' ? 'کلید اتصال فراز' :
-                        formData.smsProvider === 'SMS_IR' ? 'کلید اتصال SMS.ir' : 'کد امنیتی اتصال'
-                      }
-                      className="w-full text-xs p-2.5 pl-9 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey(!showApiKey)}
-                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
-                    >
-                      {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                  <span className="text-[10px] text-slate-400 mt-1 block">
-                    کلید امنیتی ارائه‌شده توسط سامانه پیامک جهت احراز هویت
-                  </span>
-                </div>
-              )}
-
-              {/* Sender Line Number */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                  <span>شماره خط فرستنده پیامک</span>
-                  <span className="text-[10px] text-slate-400 font-normal">خط اختصاصی / خدماتی</span>
-                </label>
-                <input
-                  type="text"
-                  disabled={!canEdit}
-                  value={formData.smsSenderNumber || ''}
-                  onChange={(e) => setFormData({ ...formData, smsSenderNumber: e.target.value })}
-                  placeholder="مثال: 3000505 یا 50004000... یا 1000..."
-                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  شماره خط فرستنده پیامک‌های کارگاه به پرسنل
-                </span>
-              </div>
-
-              {/* Username & Password (for Melipayamak) */}
-              {formData.smsProvider === 'MELIPAYAMAK' && (
-                <>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                      <span>نام کاربری پنل ملی‌پیامک (Username)</span>
-                      <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
-                    </label>
-                    <input
-                      type="text"
-                      disabled={!canEdit}
-                      value={formData.smsUsername || ''}
-                      onChange={(e) => setFormData({ ...formData, smsUsername: e.target.value })}
-                      placeholder="نام کاربری ورود به حساب ملی‌پیامک"
-                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                      <span>کلمه عبور پنل ملی‌پیامک (Password)</span>
-                      <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
-                    </label>
-                    <input
-                      type="password"
-                      disabled={!canEdit}
-                      value={formData.smsPassword || ''}
-                      onChange={(e) => setFormData({ ...formData, smsPassword: e.target.value })}
-                      placeholder="رمز عبور ورود به پنل"
-                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
-                    />
-                  </div>
-                </>
-              )}
-
-              {/* Pattern Code */}
-              {(formData.smsProvider === 'KAVENEGAR' || formData.smsProvider === 'IPPANEL_FARAZ') && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>کد الگوی پیامک کارگاه</span>
-                    <span className="text-[10px] text-slate-400 font-normal">اختیاری</span>
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!canEdit}
-                    value={formData.smsPatternCode || ''}
-                    onChange={(e) => setFormData({ ...formData, smsPatternCode: e.target.value })}
-                    placeholder="کد شناسه الگوی تایید شده در پنل پیامک"
-                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
-                  />
-                  <span className="text-[10px] text-slate-400 mt-1 block">
-                    جهت ارسال پیامک به خطوطی که پیامک‌های عمومی را مسدود کرده‌اند
-                  </span>
-                </div>
-              )}
-
-              {/* Custom REST Endpoint */}
-              {formData.smsProvider === 'CUSTOM' && (
-                <div className="col-span-1 md:col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
-                    <span>آدرس اینترنتی سامانه پیامک دلخواه</span>
-                    <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
-                  </label>
-                  <input
-                    type="url"
-                    disabled={!canEdit}
-                    value={formData.smsCustomEndpoint || ''}
-                    onChange={(e) => setFormData({ ...formData, smsCustomEndpoint: e.target.value })}
-                    placeholder="https://sms-provider.ir/send"
-                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* LIVE VERIFICATION & BALANCE INQUIRY */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-              <div>
-                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Zap className="w-4 h-4 text-amber-500" />
-                  <span>بررسی وضعیت اتصال و استعلام مانده اعتبار پنل</span>
-                </span>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  ارتباط زنده با وب‌سرویس و دریافت موجودی ریالی یا تعداد پیامک باقیمانده بدون ارسال پیامک
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleCheckBalance}
-                disabled={isCheckingBalance}
-                className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors shrink-0 disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isCheckingBalance ? 'animate-spin' : ''}`} />
-                <span>{isCheckingBalance ? 'در حال استعلام...' : 'استعلام مانده اعتبار و اتصال'}</span>
-              </button>
-            </div>
-
-            {/* Balance Result Display */}
-            {balanceResult && (
-              <div
-                className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 ${
-                  balanceResult.success
-                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
-                    : 'bg-rose-50 text-rose-900 border border-rose-200'
-                }`}
-              >
-                {balanceResult.success ? (
-                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                )}
-                <div className="space-y-1">
+            {/* Melipayamak Connection Mode Switcher (Active when MELIPAYAMAK is selected) */}
+            {formData.smsProvider === 'MELIPAYAMAK' && (
+              <div className="p-4 bg-slate-50/80 border border-slate-200/90 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold">{balanceResult.message}</span>
-                    {balanceResult.balance && (
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-200/60 text-emerald-950 font-bold font-mono text-[11px]">
-                        مانده: {balanceResult.balance}
-                      </span>
-                    )}
-                  </div>
-                  {balanceResult.details && typeof balanceResult.details === 'object' && (
-                    <span className="text-[10px] text-slate-500 font-mono block">
-                      پاسخ دریافتی: {JSON.stringify(balanceResult.details)}
+                    <Server className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-bold text-slate-800">
+                      روش اتصال به سامانه ملی‌پیامک (Connection Mode)
                     </span>
-                  )}
+                  </div>
+                  <span className="text-[11px] text-slate-500">
+                    روش فعال: <strong className="text-indigo-700 font-bold">{formData.smsConnectionMode === 'new_api' ? 'API جدید ملی‌پیامک' : 'REST قدیمی (پیش‌فرض)'}</strong>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Mode 1: Legacy REST */}
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    onClick={() => setFormData({ ...formData, smsConnectionMode: 'legacy_rest' })}
+                    className={`p-3.5 rounded-xl border text-right transition-all cursor-pointer flex flex-col justify-between ${
+                      (formData.smsConnectionMode || 'legacy_rest') === 'legacy_rest'
+                        ? 'border-indigo-600 bg-white ring-2 ring-indigo-500/20 shadow-xs'
+                        : 'border-slate-200 bg-white/70 hover:bg-white text-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${
+                          (formData.smsConnectionMode || 'legacy_rest') === 'legacy_rest' ? 'bg-indigo-600' : 'bg-slate-300'
+                        }`}></span>
+                        <span>اتصال قدیمی REST</span>
+                      </span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
+                        (formData.smsConnectionMode || 'legacy_rest') === 'legacy_rest'
+                          ? 'bg-indigo-100 text-indigo-800 font-bold'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {(formData.smsConnectionMode || 'legacy_rest') === 'legacy_rest' ? '✓ فعال' : 'پایدار'}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-mono text-left block mt-1" dir="ltr">
+                      SendSMS / GetCredit (x-www-form-urlencoded)
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-2 font-normal leading-relaxed">
+                      ارسال استاندارد فرمی با نام کاربری و کلمه عبور اختصاصی پنل ملی‌پیامک
+                    </p>
+                  </button>
+
+                  {/* Mode 2: New API */}
+                  <button
+                    type="button"
+                    disabled={!canEdit}
+                    onClick={() => setFormData({ ...formData, smsConnectionMode: 'new_api' })}
+                    className={`p-3.5 rounded-xl border text-right transition-all cursor-pointer flex flex-col justify-between ${
+                      formData.smsConnectionMode === 'new_api'
+                        ? 'border-indigo-600 bg-white ring-2 ring-indigo-500/20 shadow-xs'
+                        : 'border-slate-200 bg-white/70 hover:bg-white text-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${
+                          formData.smsConnectionMode === 'new_api' ? 'bg-indigo-600' : 'bg-slate-300'
+                        }`}></span>
+                        <span>API جدید ملی‌پیامک</span>
+                      </span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
+                        formData.smsConnectionMode === 'new_api'
+                          ? 'bg-indigo-100 text-indigo-800 font-bold'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      }`}>
+                        {formData.smsConnectionMode === 'new_api' ? '✓ فعال' : 'جدید'}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-mono text-left block mt-1" dir="ltr">
+                      Console API (Bearer Token / JSON)
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-2 font-normal leading-relaxed">
+                      اتصال با توکن احراز هویت (Bearer Token / API Key) و آدرس اختصاصی وب‌سرویس جدید
+                    </p>
+                  </button>
                 </div>
               </div>
             )}
 
-            {/* LIVE SMS TEST SECTION */}
-            <div className="bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 space-y-3">
+            {/* Dynamic Credentials Card */}
+            <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-200/80 space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Send className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>تست ارسال پیامک به شماره تلفن همراه دلخواه</span>
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                  <Key className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>مشخصات و اطلاعات اتصال به پنل ({formData.smsProvider === 'MELIPAYAMAK' ? (formData.smsConnectionMode === 'new_api' ? 'API جدید ملی‌پیامک' : 'REST قدیمی ملی‌پیامک') : formData.smsProvider})</span>
                 </span>
                 <span className="text-[11px] text-slate-400">
-                  ارسال پیامک آزمایشی جهت بررسی صحت اتصال خط
+                  اطلاعات محرمانه به صورت رمزنگاری‌شده و امن در سرور نگهداری می‌شوند
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {/* 1. Melipayamak Legacy REST Mode */}
+                {formData.smsProvider === 'MELIPAYAMAK' && (formData.smsConnectionMode || 'legacy_rest') === 'legacy_rest' && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>نام کاربری پنل ملی‌پیامک (Username)</span>
+                        <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!canEdit}
+                        value={formData.smsUsername || ''}
+                        onChange={(e) => setFormData({ ...formData, smsUsername: e.target.value })}
+                        placeholder="نام کاربری ورود به حساب ملی‌پیامک"
+                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        نام کاربری ورود به پرتال پیامکی ملی‌پیامک
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>کلمه عبور پنل ملی‌پیامک (Password)</span>
+                        <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          disabled={!canEdit}
+                          value={formData.smsPassword || ''}
+                          onChange={(e) => setFormData({ ...formData, smsPassword: e.target.value })}
+                          placeholder={formData.hasSmsPassword ? '••••••••' : 'رمز عبور ورود به پنل'}
+                          className="w-full text-xs p-2.5 pl-9 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                        >
+                          {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <span className="text-[10px] mt-1 block">
+                        {formData.hasSmsPassword || (formData.smsPassword && formData.smsPassword.includes('••')) ? (
+                          <span className="text-emerald-600 font-medium flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3" />
+                            <span>اطلاعات اتصال ذخیره شده است (جهت تغییر رمز جدید را تایپ کنید)</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">کلمه عبور ورود به پرتال ملی‌پیامک</span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>شماره خط فرستنده پیامک (Sender Line)</span>
+                        <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!canEdit}
+                        value={formData.smsSenderNumber || ''}
+                        onChange={(e) => setFormData({ ...formData, smsSenderNumber: e.target.value })}
+                        placeholder="مثال: 50004000... یا 3000..."
+                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        شماره خط اختصاصی تأیید شده در پنل ملی‌پیامک (مثال: 50002710074781)
+                      </span>
+                      {availableLines.length > 0 && (
+                        <div className="mt-2 p-2 bg-indigo-50/70 border border-indigo-200/80 rounded-xl space-y-1">
+                          <span className="text-[10px] text-indigo-900 font-bold block">
+                            خطوط اختصاصی فعال یافت‌شده در پنل شما:
+                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {availableLines.map((line) => (
+                              <button
+                                key={line}
+                                type="button"
+                                onClick={() => setFormData({ ...formData, smsSenderNumber: line })}
+                                className={`text-[11px] font-mono px-2 py-0.5 rounded-lg cursor-pointer transition-all ${
+                                  formData.smsSenderNumber === line
+                                    ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                                    : 'bg-white text-indigo-700 hover:bg-indigo-100 border border-indigo-200 font-semibold'
+                                }`}
+                              >
+                                {line} {formData.smsSenderNumber === line ? '✓ خط فعال شما' : '← انتخاب این خط'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* 2. Melipayamak New API Mode */}
+                {formData.smsProvider === 'MELIPAYAMAK' && formData.smsConnectionMode === 'new_api' && (
+                  <>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>آدرس وب‌سرویس جدید ملی‌پیامک (API Endpoint)</span>
+                        <span className="text-[10px] text-slate-400 font-normal">پیش‌فرض: simple send</span>
+                      </label>
+                      <input
+                        type="url"
+                        disabled={!canEdit}
+                        value={formData.smsNewApiEndpoint || ''}
+                        onChange={(e) => setFormData({ ...formData, smsNewApiEndpoint: e.target.value })}
+                        placeholder="https://console.melipayamak.com/api/send/simple"
+                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        آدرس وب‌سرویس جدید ارائه‌شده در مستندات پنل کاربری شما
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>کلید دسترسی یا توکن (API Token / Key)</span>
+                        <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showToken ? 'text' : 'password'}
+                          disabled={!canEdit}
+                          value={formData.smsNewApiToken || ''}
+                          onChange={(e) => setFormData({ ...formData, smsNewApiToken: e.target.value })}
+                          placeholder={formData.hasSmsNewApiToken ? '••••••••' : 'توکن یا کلید دسترسی'}
+                          className="w-full text-xs p-2.5 pl-9 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowToken(!showToken)}
+                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                        >
+                          {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <span className="text-[10px] mt-1 block">
+                        {formData.hasSmsNewApiToken || (formData.smsNewApiToken && formData.smsNewApiToken.includes('••')) ? (
+                          <span className="text-emerald-600 font-medium flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3" />
+                            <span>اطلاعات اتصال ذخیره شده است</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">توکن ارائه‌شده توسط کنسول جدید ملی‌پیامک</span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>شماره خط فرستنده پیامک (Sender Line)</span>
+                        <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!canEdit}
+                        value={formData.smsSenderNumber || ''}
+                        onChange={(e) => setFormData({ ...formData, smsSenderNumber: e.target.value })}
+                        placeholder="مثال: 50004000... یا 3000..."
+                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        شماره خط فرستنده اختصاصی در پنل کاربری
+                      </span>
+                    </div>
+                  </>
+                )}
+
+                {/* 3. Other Providers (Kavenegar, Faraz, Ghasedak, SMS.ir, Custom) */}
+                {formData.smsProvider !== 'MELIPAYAMAK' && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>کلید اختصاصی اتصال سامانه پیامک</span>
+                        <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showApiKey ? 'text' : 'password'}
+                          disabled={!canEdit}
+                          value={formData.smsApiKey || ''}
+                          onChange={(e) => setFormData({ ...formData, smsApiKey: e.target.value })}
+                          placeholder={formData.hasSmsApiKey ? '••••••••' : 'کد کلید وب‌سرویس'}
+                          className="w-full text-xs p-2.5 pl-9 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                        >
+                          {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        کلید امنیتی ارائه‌شده توسط سامانه پیامک جهت احراز هویت
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                        <span>شماره خط فرستنده پیامک</span>
+                        <span className="text-[10px] text-slate-400 font-normal">خط اختصاصی / خدماتی</span>
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!canEdit}
+                        value={formData.smsSenderNumber || ''}
+                        onChange={(e) => setFormData({ ...formData, smsSenderNumber: e.target.value })}
+                        placeholder="مثال: 3000505 یا 50004000..."
+                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-1 block">
+                        شماره خط فرستنده پیامک‌های کارگاه به پرسنل
+                      </span>
+                    </div>
+
+                    {(formData.smsProvider === 'KAVENEGAR' || formData.smsProvider === 'IPPANEL_FARAZ') && (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                          <span>کد الگوی پیامک کارگاه</span>
+                          <span className="text-[10px] text-slate-400 font-normal">اختیاری</span>
+                        </label>
+                        <input
+                          type="text"
+                          disabled={!canEdit}
+                          value={formData.smsPatternCode || ''}
+                          onChange={(e) => setFormData({ ...formData, smsPatternCode: e.target.value })}
+                          placeholder="کد شناسه الگوی تایید شده در پنل پیامک"
+                          className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          جهت ارسال پیامک به خطوط مسدودکننده پیامک‌های تبلیغاتی
+                        </span>
+                      </div>
+                    )}
+
+                    {formData.smsProvider === 'CUSTOM' && (
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center justify-between">
+                          <span>آدرس اینترنتی سامانه پیامک دلخواه</span>
+                          <span className="text-[10px] text-rose-500 font-normal">* الزامی</span>
+                        </label>
+                        <input
+                          type="url"
+                          disabled={!canEdit}
+                          value={formData.smsCustomEndpoint || ''}
+                          onChange={(e) => setFormData({ ...formData, smsCustomEndpoint: e.target.value })}
+                          placeholder="https://sms-provider.ir/send"
+                          className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-indigo-500 font-mono text-left"
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Section: Connection Status Card & Action Bar */}
+            <div className="p-4 bg-gradient-to-r from-slate-50 to-indigo-50/40 rounded-2xl border border-slate-200/90 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-amber-500" />
+                    <span className="text-xs font-bold text-slate-900">اتصال و وضعیت پنل</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-white border border-slate-200 font-mono text-slate-600">
+                      {formData.smsProvider === 'MELIPAYAMAK' ? (formData.smsConnectionMode === 'new_api' ? 'API جدید' : 'REST قدیمی') : formData.smsProvider}
+                    </span>
+                  </div>
+
+                  {/* Status Indicator Badges */}
+                  <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                    {(() => {
+                      const status = isCheckingBalance ? 'CHECKING' : (formData.smsLastConnectionStatus || 'UNKNOWN');
+                      switch (status) {
+                        case 'CHECKING':
+                          return (
+                            <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 flex items-center gap-1.5">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                              <span>در حال بررسی اتصال...</span>
+                            </span>
+                          );
+                        case 'SUCCESS':
+                          return (
+                            <span className="text-xs font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>اتصال برقرار است</span>
+                            </span>
+                          );
+                        case 'INVALID_CREDENTIALS':
+                          return (
+                            <span className="text-xs font-bold text-rose-800 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                              <span>نام کاربری/رمز/کلید اتصال نامعتبر است</span>
+                            </span>
+                          );
+                        case 'INVALID_SENDER':
+                          return (
+                            <span className="text-xs font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                              <span>خط فرستنده نامعتبر یا تأییدنشده است</span>
+                            </span>
+                          );
+                        case 'INSUFFICIENT_CREDIT':
+                          return (
+                            <span className="text-xs font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                              <span>اعتبار کافی نیست</span>
+                            </span>
+                          );
+                        case 'SERVICE_ERROR':
+                          return (
+                            <span className="text-xs font-bold text-rose-800 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                              <span>خطای سرویس پیامک</span>
+                            </span>
+                          );
+                        case 'NETWORK_ERROR':
+                          return (
+                            <span className="text-xs font-bold text-rose-800 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                              <span>خطا در ارتباط با سرویس</span>
+                            </span>
+                          );
+                        default:
+                          return (
+                            <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 flex items-center gap-1.5">
+                              <Info className="w-3.5 h-3.5 text-slate-500" />
+                              <span>اتصال بررسی نشده</span>
+                            </span>
+                          );
+                      }
+                    })()}
+
+                    {/* Balance Display if Available */}
+                    {(balanceResult?.balance || formData.smsLastBalance) && (
+                      <span className="text-xs font-bold text-indigo-900 bg-indigo-100/70 px-2.5 py-1 rounded-lg border border-indigo-200 font-mono">
+                        مانده اعتبار: {balanceResult?.balance || formData.smsLastBalance}
+                      </span>
+                    )}
+
+                    {/* Last Check Timestamp */}
+                    {formData.smsLastConnectionCheck && (
+                      <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        <span>آخرین بررسی: {new Date(formData.smsLastConnectionCheck).toLocaleTimeString('fa-IR')}</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {balanceResult?.message && (
+                    <p className="text-[11px] text-slate-600 pt-1 leading-relaxed">
+                      {balanceResult.message}
+                    </p>
+                  )}
+                </div>
+
+                {/* Connection Action Buttons */}
+                <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={handleCheckBalance}
+                    disabled={isCheckingBalance}
+                    className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isCheckingBalance ? 'animate-spin' : ''}`} />
+                    <span>{isCheckingBalance ? 'در حال استعلام...' : 'استعلام مانده اعتبار'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={isSaving || !canEdit}
+                    className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSaving ? 'در حال ذخیره...' : 'ذخیره تنظیمات'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* LIVE SMS TEST SECTION */}
+            <div className="bg-slate-50/90 border border-slate-200/90 rounded-2xl p-4 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                  <Send className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>ارسال پیامک آزمایشی و تست صحت اتصال</span>
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  تست واقعی اتصال و ارسال پیامک از همان پنل
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    شماره تلفن همراه گیرنده تست:
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>شماره تست گیرنده:</span>
+                    <span className="text-[10px] text-slate-400 font-mono">09xxxxxxxxx</span>
                   </label>
                   <input
                     type="text"
@@ -1108,7 +1453,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div className="sm:col-span-2 flex items-end gap-2">
                   <div className="flex-1">
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                       متن پیامک آزمایشی:
                     </label>
                     <input
@@ -1127,17 +1472,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors shrink-0 disabled:opacity-50"
                   >
                     <Send className="w-3.5 h-3.5" />
-                    <span>{isTestingSms ? 'در حال ارسال پیامک...' : 'ارسال پیامک تست'}</span>
+                    <span>{isTestingSms ? 'در حال ارسال...' : 'ارسال پیامک تست'}</span>
                   </button>
                 </div>
               </div>
 
+              {/* Test Result Display */}
               {testSmsResult && (
                 <div
-                  className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 ${
+                  className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 transition-all ${
                     testSmsResult.success
-                      ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
-                      : 'bg-rose-50 text-rose-900 border border-rose-200'
+                      ? 'bg-emerald-50 text-emerald-950 border border-emerald-200'
+                      : 'bg-rose-50 text-rose-950 border border-rose-200'
                   }`}
                 >
                   {testSmsResult.success ? (
@@ -1145,12 +1491,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ) : (
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   )}
-                  <div className="space-y-1">
-                    <p className="font-bold">{testSmsResult.message}</p>
-                    {testSmsResult.results && (
-                      <p className="text-[10px] font-mono opacity-80" dir="ltr">
-                        Gateway Response: {typeof testSmsResult.results === 'object' ? JSON.stringify(testSmsResult.results) : testSmsResult.results}
-                      </p>
+                  <div className="space-y-1 w-full">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <p className="font-bold text-xs">{testSmsResult.message}</p>
+                      {testSmsResult.trackingCode && (
+                        <span className="text-[11px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono font-bold">
+                          شناسه پیگیری: {testSmsResult.trackingCode}
+                        </span>
+                      )}
+                    </div>
+                    {testSmsResult.success && (
+                      <span className="text-[11px] text-emerald-700 block">
+                        زمان آخرین تست: {new Date().toLocaleTimeString('fa-IR')} | گیرنده: {testPhone}
+                      </span>
                     )}
                   </div>
                 </div>

@@ -152,12 +152,17 @@ function loadInitialDb(): DatabaseSchema {
         }
       ],
       smsEnabled: false,
-      smsProvider: 'KAVENEGAR',
+      smsProvider: 'MELIPAYAMAK',
+      smsConnectionMode: 'legacy_rest',
       smsSenderNumber: '',
       smsApiKey: '',
       smsUsername: '',
       smsPassword: '',
+      smsNewApiEndpoint: '',
+      smsNewApiToken: '',
       smsPatternCode: '',
+      smsLastConnectionStatus: 'UNKNOWN',
+      smsLastTestStatus: 'UNKNOWN',
       qrRefreshIntervalSeconds: 30,
       defaultWorkStartTime: '07:00',
       defaultWorkEndTime: '16:00',
@@ -266,7 +271,11 @@ let db: DatabaseSchema = (() => {
           return u;
         });
       }
-      return { ...loadInitialDb(), ...data };
+      const merged = { ...loadInitialDb(), ...data };
+      if (merged.settings && !merged.settings.smsConnectionMode) {
+        merged.settings.smsConnectionMode = 'legacy_rest';
+      }
+      return merged;
     } catch (e) {
       console.error('Failed to parse db.json, initializing fresh store:', e);
       return loadInitialDb();
@@ -2030,16 +2039,100 @@ app.post('/api/salaries/mark-paid', requireRole('ADMIN', 'MANAGER'), (req: Reque
 });
 
 // 11. Settings & Full Backup (Fixes BACKUP-001, BACKUP-002, BACKUP-003, SET-001)
+export function sanitizeSettingsForClient(settings: any) {
+  if (!settings) return settings;
+  const clone = { ...settings };
+  clone.hasSmsPassword = Boolean(clone.smsPassword && String(clone.smsPassword).trim());
+  clone.hasSmsApiKey = Boolean(clone.smsApiKey && String(clone.smsApiKey).trim());
+  clone.hasSmsNewApiToken = Boolean(clone.smsNewApiToken && String(clone.smsNewApiToken).trim());
+
+  if (clone.smsPassword) {
+    clone.smsPassword = '••••••••';
+  }
+  if (clone.smsApiKey) {
+    clone.smsApiKey = clone.smsApiKey.length > 8
+      ? `${clone.smsApiKey.substring(0, 4)}••••${clone.smsApiKey.substring(clone.smsApiKey.length - 4)}`
+      : '••••••••';
+  }
+  if (clone.smsNewApiToken) {
+    clone.smsNewApiToken = clone.smsNewApiToken.length > 8
+      ? `${clone.smsNewApiToken.substring(0, 4)}••••${clone.smsNewApiToken.substring(clone.smsNewApiToken.length - 4)}`
+      : '••••••••';
+  }
+  return clone;
+}
+
 app.get('/api/settings', (_req: Request, res: Response) => {
-  res.json(db.settings);
+  res.json(sanitizeSettingsForClient(db.settings));
 });
 
 app.put('/api/settings', requireRole('ADMIN'), (req: Request, res: Response) => {
-  db.settings = { ...db.settings, ...req.body };
+  const incoming = req.body || {};
+  const current = db.settings || {};
+
+  // Preserve existing secrets if masked or empty and not explicitly cleared
+  let smsPassword = current.smsPassword;
+  if (incoming.clearSmsPassword) {
+    smsPassword = '';
+  } else if (typeof incoming.smsPassword === 'string' && incoming.smsPassword.trim()) {
+    const trimmed = incoming.smsPassword.trim();
+    if (!trimmed.includes('••') && !trimmed.includes('**')) {
+      smsPassword = trimmed;
+    }
+  }
+
+  let smsApiKey = current.smsApiKey;
+  if (incoming.clearSmsApiKey) {
+    smsApiKey = '';
+  } else if (typeof incoming.smsApiKey === 'string' && incoming.smsApiKey.trim()) {
+    const trimmed = incoming.smsApiKey.trim();
+    if (!trimmed.includes('••') && !trimmed.includes('**')) {
+      smsApiKey = trimmed;
+    }
+  }
+
+  let smsNewApiToken = current.smsNewApiToken;
+  if (incoming.clearSmsNewApiToken) {
+    smsNewApiToken = '';
+  } else if (typeof incoming.smsNewApiToken === 'string' && incoming.smsNewApiToken.trim()) {
+    const trimmed = incoming.smsNewApiToken.trim();
+    if (!trimmed.includes('••') && !trimmed.includes('**')) {
+      smsNewApiToken = trimmed;
+    }
+  }
+
+  const {
+    clearSmsPassword: _c1,
+    clearSmsApiKey: _c2,
+    clearSmsNewApiToken: _c3,
+    hasSmsPassword: _h1,
+    hasSmsApiKey: _h2,
+    hasSmsNewApiToken: _h3,
+    ...restOfIncoming
+  } = incoming;
+
+  db.settings = {
+    ...current,
+    ...restOfIncoming,
+    smsPassword,
+    smsApiKey,
+    smsNewApiToken
+  };
+
   if (!persistDb()) {
     return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی تنظیمات در سرور' });
   }
-  res.json({ success: true, settings: db.settings });
+
+  const user = (req as any).user;
+  logServerAudit(
+    user?.id || 'usr_admin',
+    user?.name || 'مدیر',
+    'بروزرسانی تنظیمات',
+    'تنظیمات سیستم',
+    'تنظیمات سامانه و درگاه پیامک ذخیره و پایدار شد.'
+  );
+
+  res.json({ success: true, settings: sanitizeSettingsForClient(db.settings) });
 });
 
 // Full Backup Export strictly for Super Admin (Fixes BACKUP-002)
@@ -2117,25 +2210,399 @@ app.post('/api/backup/import', requireRole('ADMIN'), (req: Request, res: Respons
 // REAL SMS GATEWAY DISPATCHER & INTEGRATIONS
 // ==========================================
 
-// Helper: normalize Iranian phone numbers to standard 09xxxxxxxxx or international format
-function normalizeIranianPhoneNumber(rawPhone: string): string {
+// Rate limit tracker for test SMS
+const lastSmsTestAttempts: { [key: string]: number } = {};
+
+// Helper: normalize Iranian phone numbers to standard 09xxxxxxxxx
+export function normalizeIranianPhoneNumber(rawPhone: string): string {
   if (!rawPhone) return '';
   // Convert Persian and Arabic digits to Latin 0-9
   let clean = String(rawPhone)
     .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d).toString())
     .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
-    .replace(/\D/g, ''); // strip non-digits
+    .trim();
 
-  if (clean.startsWith('0098')) {
-    clean = clean.substring(4);
+  // Remove spaces, dashes, brackets, etc.
+  clean = clean.replace(/[^\d+]/g, '');
+
+  if (clean.startsWith('+980')) {
+    clean = '0' + clean.substring(4);
+  } else if (clean.startsWith('+98')) {
+    clean = '0' + clean.substring(3);
+  } else if (clean.startsWith('00980')) {
+    clean = '0' + clean.substring(5);
+  } else if (clean.startsWith('0098')) {
+    clean = '0' + clean.substring(4);
+  } else if (clean.startsWith('980') && clean.length === 13) {
+    clean = '0' + clean.substring(3);
   } else if (clean.startsWith('98') && clean.length === 12) {
-    clean = clean.substring(2);
-  }
-
-  if (clean.startsWith('9') && clean.length === 10) {
+    clean = '0' + clean.substring(2);
+  } else if (clean.startsWith('9') && clean.length === 10) {
     clean = '0' + clean;
   }
+
+  // Remove any stray + or non-numeric digits
+  clean = clean.replace(/\D/g, '');
   return clean;
+}
+
+// Resolve effective credentials: merge incoming config with saved db.settings to prevent losing masked secrets
+export function resolveEffectiveSmsConfig(config?: any) {
+  const base = db.settings || {};
+  if (!config) return base;
+  return {
+    ...base,
+    ...config,
+    smsPassword: (config.smsPassword && typeof config.smsPassword === 'string' && !config.smsPassword.includes('••') && !config.smsPassword.includes('**'))
+      ? config.smsPassword.trim()
+      : base.smsPassword,
+    smsApiKey: (config.smsApiKey && typeof config.smsApiKey === 'string' && !config.smsApiKey.includes('••') && !config.smsApiKey.includes('**'))
+      ? config.smsApiKey.trim()
+      : base.smsApiKey,
+    smsNewApiToken: (config.smsNewApiToken && typeof config.smsNewApiToken === 'string' && !config.smsNewApiToken.includes('••') && !config.smsNewApiToken.includes('**'))
+      ? config.smsNewApiToken.trim()
+      : base.smsNewApiToken,
+  };
+}
+
+// Melipayamak Error Dictionary
+export const MELIPAYAMAK_ERROR_MAP: { [key: number]: { message: string; code: string } } = {
+  0: { message: 'نام کاربری یا کلمه عبور ملی‌پیامک نادرست است.', code: 'INVALID_CREDENTIALS' },
+  2: { message: 'نام کاربری یا کلمه عبور ملی‌پیامک نادرست است.', code: 'INVALID_CREDENTIALS' },
+  3: { message: 'اعتبار ریالی یا سهمیه حساب ملی‌پیامک کافی نیست.', code: 'INSUFFICIENT_CREDIT' },
+  4: { message: 'محدودیت تعداد ارسال پیامک روزانه در پنل ملی‌پیامک فعال است.', code: 'SERVICE_ERROR' },
+  5: { message: 'شماره خط فرستنده در پنل ملی‌پیامک نامعتبر یا تاییدنشده است. لطفاً شماره خط اختصاصی پنل خود را در فیلد "شماره خط فرستنده پیامک" وارد کرده و دکمه ذخیره تنظیمات را بزنید.', code: 'INVALID_SENDER' },
+  6: { message: 'سامانه ملی‌پیامک موقتاً در حال بروزرسانی می‌باشد.', code: 'SERVICE_ERROR' },
+  7: { message: 'متن پیامک حاوی کلمات فیلترشده یا عبارات غیرمجاز است.', code: 'SERVICE_ERROR' },
+  8: { message: 'تعداد گیرندگان کمتر از حداقل مجاز ارسال است.', code: 'SERVICE_ERROR' },
+  9: { message: 'شماره موبایل گیرنده از سمت سامانه ملی‌پیامک نامعتبر یا غیرقابل دریافت پیامک اعلام شد (کد ۹ ملی‌پیامک).', code: 'INVALID_RECIPIENT' },
+  10: { message: 'حساب کاربری در سامانه ملی‌پیامک غیرفعال است.', code: 'INVALID_CREDENTIALS' },
+  11: { message: 'ارسال پیامک از سمت سامانه ملی‌پیامک انجام نشد.', code: 'SERVICE_ERROR' },
+  12: { message: 'مدارک و احراز هویت حساب کاربری در ملی‌پیامک تأیید نشده است.', code: 'INVALID_CREDENTIALS' },
+  13: { message: 'شماره اختصاصی برای این حساب کاربری در ملی‌پیامک تعریف نشده است. خط فرستنده را بررسی نمایید.', code: 'INVALID_SENDER' },
+  14: { message: 'شماره اختصاصی فرستنده در سامانه ملی‌پیامک مسدود است.', code: 'INVALID_SENDER' },
+  15: { message: 'حساب کاربری در سامانه ملی‌پیامک مسدود شده است.', code: 'INVALID_CREDENTIALS' },
+};
+
+// Parse Melipayamak response tolerating JSON, raw text, and numerical IDs
+export function parseMelipayamakResponse(rawText: string, httpStatus: number): {
+  success: boolean;
+  value?: any;
+  retStatus?: number;
+  message?: string;
+  trackingCode?: string;
+  statusCode?: string;
+} {
+  const trimmed = (rawText || '').trim();
+  let parsed: any = null;
+
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    const num = Number(trimmed);
+    if (!isNaN(num) && num > 15) {
+      parsed = { Value: trimmed, RetStatus: 1 };
+    } else if (!isNaN(num)) {
+      parsed = { Value: trimmed, RetStatus: num };
+    } else {
+      parsed = { Value: trimmed, RetStatus: -1, StrRetStatus: trimmed };
+    }
+  }
+
+  const retStatus = parsed?.RetStatus !== undefined ? Number(parsed.RetStatus) : (parsed?.status === 'success' || parsed?.success ? 1 : undefined);
+  const val = parsed?.Value !== undefined ? String(parsed.Value) : (parsed?.recId || parsed?.id || parsed?.trackingCode || '');
+
+  // Success conditions: RetStatus === 1 OR (Value is long positive string and not an error code)
+  if ((httpStatus >= 200 && httpStatus < 300) && (retStatus === 1 || (val && val.length >= 6 && !val.startsWith('-')))) {
+    return {
+      success: true,
+      value: parsed?.Value ?? val,
+      retStatus: 1,
+      trackingCode: val || 'OK',
+      statusCode: 'SUCCESS'
+    };
+  }
+
+  const errInfo = retStatus !== undefined ? MELIPAYAMAK_ERROR_MAP[retStatus] : undefined;
+  const msg = errInfo?.message || parsed?.StrRetStatus || parsed?.message || `خطای درگاه ملی‌پیامک (کد: ${retStatus ?? httpStatus})`;
+
+  return {
+    success: false,
+    value: parsed?.Value,
+    retStatus,
+    message: msg,
+    statusCode: errInfo?.code || (httpStatus === 401 ? 'INVALID_CREDENTIALS' : 'SERVICE_ERROR')
+  };
+}
+
+// Normalize provider error messages
+export function normalizeSmsError(provider: string, rawStatus: any, rawResponse?: any): { message: string; statusCode: string } {
+  if (provider === 'MELIPAYAMAK') {
+    const code = Number(rawStatus);
+    if (MELIPAYAMAK_ERROR_MAP[code]) {
+      return { message: MELIPAYAMAK_ERROR_MAP[code].message, statusCode: MELIPAYAMAK_ERROR_MAP[code].code };
+    }
+    return {
+      message: rawResponse?.StrRetStatus || rawResponse?.message || `خطای سرویس ملی‌پیامک (کد: ${rawStatus})`,
+      statusCode: 'SERVICE_ERROR'
+    };
+  }
+  return {
+    message: rawResponse?.message || `خطای درگاه پیامک ${provider}`,
+    statusCode: 'SERVICE_ERROR'
+  };
+}
+
+// 1. Adapter: Get Melipayamak Credit & Check Connection
+export async function getMelipayamakCredit(config: any): Promise<{
+  success: boolean;
+  balance?: string | number;
+  message: string;
+  statusCode?: string;
+  raw?: any;
+}> {
+  const mode = config.smsConnectionMode || 'legacy_rest';
+
+  if (mode === 'new_api') {
+    const token = (config.smsNewApiToken || config.smsApiKey || '').trim();
+    const endpoint = (config.smsNewApiEndpoint || '').trim() || 'https://console.melipayamak.com/api/send/simple';
+    if (!token) {
+      return {
+        success: false,
+        message: 'کلید دسترسی (API Token) جدید ملی‌پیامک وارد نشده است.',
+        statusCode: 'INVALID_CREDENTIALS'
+      };
+    }
+    try {
+      const balanceUrl = endpoint.includes('/send/') ? endpoint.replace(/\/send\/.*$/, '/balance') : endpoint;
+      const res = await fetch(balanceUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+          'X-API-KEY': token
+        }
+      });
+      const rawText = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(rawText); } catch { data = { raw: rawText }; }
+      if (res.ok) {
+        const credit = data.balance ?? data.credit ?? data.value ?? data.amount;
+        return {
+          success: true,
+          balance: credit !== undefined ? `${Number(credit).toLocaleString('fa-IR')} ریال` : 'متصل',
+          message: `اتصال به API جدید ملی‌پیامک برقرار است.${credit !== undefined ? ` مانده اعتبار: ${Number(credit).toLocaleString('fa-IR')} ریال` : ''}`,
+          statusCode: 'SUCCESS',
+          raw: data
+        };
+      }
+      return {
+        success: false,
+        message: data.message || `خطای اتصال به API جدید ملی‌پیامک (کد: ${res.status})`,
+        statusCode: res.status === 401 || res.status === 403 ? 'INVALID_CREDENTIALS' : 'SERVICE_ERROR',
+        raw: data
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `خطا در ارتباط با API جدید ملی‌پیامک: ${err.message}`,
+        statusCode: 'NETWORK_ERROR'
+      };
+    }
+  }
+
+  // legacy_rest: Requires application/x-www-form-urlencoded
+  const username = (config.smsUsername || '').trim();
+  const password = (config.smsPassword || '').trim();
+  if (!username || !password) {
+    return {
+      success: false,
+      message: 'نام کاربری و کلمه عبور ملی‌پیامک (روش REST قدیمی) وارد نشده است.',
+      statusCode: 'INVALID_CREDENTIALS'
+    };
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.append('username', username);
+    params.append('password', password);
+
+    const response = await fetch('https://rest.payamak-panel.com/api/SendSMS/GetCredit', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: params.toString()
+    });
+
+    const rawText = await response.text();
+    const parsed = parseMelipayamakResponse(rawText, response.status);
+
+    if (parsed.success) {
+      const credit = Number(parsed.value ?? 0);
+      return {
+        success: true,
+        balance: `${credit.toLocaleString('fa-IR')} ریال`,
+        message: `اتصال به سامانه ملی‌پیامک برقرار است. مانده اعتبار: ${credit.toLocaleString('fa-IR')} ریال`,
+        statusCode: 'SUCCESS',
+        raw: rawText
+      };
+    }
+
+    return {
+      success: false,
+      message: parsed.message || 'خطا در احراز هویت یا استعلام اعتبار ملی‌پیامک.',
+      statusCode: parsed.statusCode || 'SERVICE_ERROR',
+      raw: rawText
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `خطا در ارتباط با سرور ملی‌پیامک: ${err.message}`,
+      statusCode: 'NETWORK_ERROR'
+    };
+  }
+}
+
+// 2. Adapter: Send SMS via Melipayamak (Form-UrlEncoded for legacy_rest, JSON for new_api)
+export async function sendMelipayamakSms(
+  config: any,
+  recipients: string[],
+  message: string
+): Promise<{
+  success: boolean;
+  message: string;
+  trackingCode?: string;
+  results?: any;
+  statusCode?: string;
+}> {
+  const mode = config.smsConnectionMode || 'legacy_rest';
+  const senderNumber = (config.smsSenderNumber || '').trim();
+
+  if (mode === 'new_api') {
+    const token = (config.smsNewApiToken || config.smsApiKey || '').trim();
+    const endpoint = (config.smsNewApiEndpoint || '').trim() || 'https://console.melipayamak.com/api/send/simple';
+    if (!token) {
+      return {
+        success: false,
+        message: 'کلید دسترسی (API Token) جدید ملی‌پیامک در تنظیمات وارد نشده است.',
+        statusCode: 'INVALID_CREDENTIALS'
+      };
+    }
+    if (!senderNumber) {
+      return {
+        success: false,
+        message: 'شماره خط فرستنده اختصاصی ملی‌پیامک در تنظیمات مشخص نشده است.',
+        statusCode: 'INVALID_SENDER'
+      };
+    }
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token.startsWith('Bearer ') ? token : `Bearer ${token}`,
+          'X-API-KEY': token
+        },
+        body: JSON.stringify({
+          from: senderNumber,
+          to: recipients.length === 1 ? recipients[0] : recipients,
+          text: message
+        })
+      });
+      const rawText = await response.text();
+      let data: any = {};
+      try { data = JSON.parse(rawText); } catch { data = { raw: rawText }; }
+      if (response.ok && (data.recId || data.id || data.trackingCode || data.status === 'success' || data.success === true)) {
+        const tracking = String(data.recId || data.id || data.trackingCode || 'OK');
+        return {
+          success: true,
+          message: `پیامک با موفقیت از طریق API جدید ملی‌پیامک ارسال گردید (شناسه: ${tracking})`,
+          trackingCode: tracking,
+          statusCode: 'SUCCESS',
+          results: data
+        };
+      }
+      return {
+        success: false,
+        message: data.message || `خطا در ارسال از طریق API جدید ملی‌پیامک (کد: ${response.status})`,
+        statusCode: response.status === 401 ? 'INVALID_CREDENTIALS' : 'SERVICE_ERROR',
+        results: data
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `خطا در برقراری ارتباط با API جدید ملی‌پیامک: ${err.message}`,
+        statusCode: 'NETWORK_ERROR'
+      };
+    }
+  }
+
+  // legacy_rest: FORM-URLENCODED
+  const username = (config.smsUsername || '').trim();
+  const password = (config.smsPassword || '').trim();
+  if (!username || !password) {
+    return {
+      success: false,
+      message: 'نام کاربری و رمز عبور ملی‌پیامک در تنظیمات وارد نشده است.',
+      statusCode: 'INVALID_CREDENTIALS'
+    };
+  }
+  if (!senderNumber) {
+    return {
+      success: false,
+      message: 'شماره خط فرستنده اختصاصی ملی‌پیامک در تنظیمات مشخص نشده است.',
+      statusCode: 'INVALID_SENDER'
+    };
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.append('username', username);
+    params.append('password', password);
+    params.append('to', recipients.join(','));
+    params.append('from', senderNumber);
+    params.append('text', message);
+    params.append('isflash', 'false');
+
+    const response = await fetch('https://rest.payamak-panel.com/api/SendSMS/SendSMS', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: params.toString()
+    });
+
+    const rawText = await response.text();
+    const parsed = parseMelipayamakResponse(rawText, response.status);
+
+    if (parsed.success) {
+      return {
+        success: true,
+        message: `پیامک با موفقیت از طریق درگاه ملی‌پیامک ارسال گردید (شناسه پیگیری: ${parsed.trackingCode || 'تأیید'})`,
+        trackingCode: parsed.trackingCode,
+        statusCode: 'SUCCESS',
+        results: parsed.value
+      };
+    }
+
+    return {
+      success: false,
+      message: parsed.message || 'خطا در ارسال پیامک با درگاه ملی‌پیامک.',
+      statusCode: parsed.statusCode || 'SERVICE_ERROR',
+      results: rawText
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `خطا در ارتباط با سرور ملی‌پیامک: ${err.message}`,
+      statusCode: 'NETWORK_ERROR'
+    };
+  }
+}
+
+// 3. Adapter: Check Melipayamak Connection
+export async function checkMelipayamakConnection(config: any) {
+  return await getMelipayamakCredit(config);
 }
 
 // Check Balance & Connectivity with Real SMS Provider
@@ -2144,9 +2611,10 @@ async function checkSmsBalanceGateway(config?: any): Promise<{
   message: string;
   balance?: string | number;
   provider?: string;
+  statusCode?: string;
   details?: any;
 }> {
-  const settings = config || db.settings;
+  const settings = resolveEffectiveSmsConfig(config);
   const provider = settings.smsProvider || 'KAVENEGAR';
   const apiKey = (settings.smsApiKey || '').trim();
   const username = (settings.smsUsername || '').trim();
@@ -2214,39 +2682,23 @@ async function checkSmsBalanceGateway(config?: any): Promise<{
 
   // 3. MELIPAYAMAK
   if (provider === 'MELIPAYAMAK') {
-    if (!username || !password) {
-      return { success: false, message: 'نام کاربری و رمز عبور ملی‌پیامک وارد نشده است.' };
+    const result = await checkMelipayamakConnection(settings);
+    db.settings.smsLastConnectionCheck = new Date().toISOString();
+    db.settings.smsLastConnectionStatus = (result.statusCode as any) || (result.success ? 'SUCCESS' : 'FAILED');
+    db.settings.smsLastConnectionMessage = result.message;
+    if (result.balance) {
+      db.settings.smsLastBalance = result.balance;
     }
-    try {
-      const response = await fetch('https://rest.payamak-panel.com/api/SendSMS/GetCredit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      const data: any = await response.json();
-      if (response.ok && data?.RetStatus === 1) {
-        const credit = Number(data?.Value || 0);
-        return {
-          success: true,
-          provider: 'ملی‌پیامک (Melipayamak)',
-          balance: credit.toLocaleString('fa-IR') + ' ریال',
-          message: `اتصال به سامانه ملی‌پیامک برقرار است. مانده اعتبار: ${credit.toLocaleString('fa-IR')} ریال`,
-          details: data
-        };
-      }
-      const meliErrors: { [key: number]: string } = {
-        2: 'نام کاربری یا کلمه عبور ملی‌پیامک نادرست است.',
-        3: 'اعتبار حساب ملی‌پیامک کافی نیست.',
-        6: 'سامانه ملی‌پیامک در حال حاضر در دسترس نیست.'
-      };
-      return {
-        success: false,
-        message: meliErrors[data?.RetStatus] || data?.StrRetStatus || `خطای درگاه ملی‌پیامک (کد: ${data?.RetStatus || response.status})`,
-        details: data
-      };
-    } catch (err: any) {
-      return { success: false, message: `خطا در ارتباط با سرور ملی‌پیامک: ${err.message}` };
-    }
+    persistDb();
+
+    return {
+      success: result.success,
+      provider: `ملی‌پیامک (${settings.smsConnectionMode === 'new_api' ? 'API جدید' : 'REST قدیمی'})`,
+      balance: result.balance,
+      message: result.message,
+      statusCode: result.statusCode,
+      details: result.raw
+    };
   }
 
   // 4. GHASEDAK
@@ -2331,8 +2783,8 @@ async function sendRealSmsGateway(options: {
   recipients: string[];
   message: string;
   config?: any;
-}): Promise<{ success: boolean; message: string; results?: any }> {
-  const settings = options.config || db.settings;
+}): Promise<{ success: boolean; message: string; trackingCode?: string; results?: any; statusCode?: string }> {
+  const settings = resolveEffectiveSmsConfig(options.config);
 
   // 0. Verify SMS is enabled
   if (settings.smsEnabled === false) {
@@ -2460,44 +2912,7 @@ async function sendRealSmsGateway(options: {
 
   // 3. MELIPAYAMAK (ملی‌پیامک)
   if (provider === 'MELIPAYAMAK') {
-    if (!username || !password) {
-      return { success: false, message: 'نام کاربری و رمز عبور ملی‌پیامک در تنظیمات وارد نشده است.' };
-    }
-    try {
-      const response = await fetch('https://rest.payamak-panel.com/api/SendSMS/SendSMS', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username,
-          password,
-          to: validRecipients.join(','),
-          from: senderNumber || '',
-          text: options.message,
-          isFlash: false
-        })
-      });
-      const data: any = await response.json();
-      if (response.ok && (data?.RetStatus === 1 || (typeof data?.Value === 'string' && data?.Value.length > 5))) {
-        return {
-          success: true,
-          message: `پیامک با موفقیت از طریق ملی‌پیامک ارسال شد (شناسه پیگیری: ${data?.Value || 'OK'})`,
-          results: data
-        };
-      }
-      const meliErrors: { [key: number]: string } = {
-        2: 'نام کاربری یا رمز عبور ملی‌پیامک اشتباه است.',
-        3: 'اعتبار حساب ملی‌پیامک شما کافی نیست.',
-        4: 'محدودیت تعداد ارسال روزانه در پنل ملی‌پیامک.',
-        5: 'شماره فرستنده نامعتبر یا تایید نشده است.'
-      };
-      return {
-        success: false,
-        message: meliErrors[data?.RetStatus] || data?.StrRetStatus || `خطای درگاه ملی‌پیامک (کد: ${data?.RetStatus || response.status})`,
-        results: data
-      };
-    } catch (err: any) {
-      return { success: false, message: `خطا در ارتباط با سرور ملی‌پیامک: ${err.message}` };
-    }
+    return await sendMelipayamakSms(settings, validRecipients, options.message);
   }
 
   // 4. GHASEDAK (قاصدک)
@@ -2624,19 +3039,57 @@ app.post('/api/sms/balance', requireRole('ADMIN', 'MANAGER'), async (req: Reques
   res.json(result);
 });
 
-// Test SMS endpoint for Settings verification
+// Test SMS endpoint for Settings verification with rate-limiting and audit safety
 app.post('/api/sms/test', requireRole('ADMIN', 'MANAGER'), async (req: Request, res: Response) => {
+  const clientIp = (req.ip || req.headers['x-forwarded-for'] || '127.0.0.1').toString();
+  const user = (req as any).user;
+  const rateKey = `${clientIp}_${user?.id || 'admin'}`;
+  const now = Date.now();
+
+  // Rate limit: 4 seconds debounce
+  if (lastSmsTestAttempts[rateKey] && now - lastSmsTestAttempts[rateKey] < 4000) {
+    return res.status(429).json({
+      success: false,
+      message: 'لطفاً چند ثانیه بین هر ارسال پیامک آزمایشی صبر کنید.'
+    });
+  }
+  lastSmsTestAttempts[rateKey] = now;
+
   const { recipientPhone, testMessage, config } = req.body;
   if (!recipientPhone) {
     return res.status(400).json({ success: false, message: 'شماره تلفن همراه گیرنده الزامی است.' });
   }
 
-  const messageText = testMessage?.trim() || `تست اتصال وب‌سرویس پیامک کارگاه تخته‌نرد M.GAMMON\nزمان: ${new Date().toLocaleTimeString('fa-IR')}`;
+  const normalizedPhone = normalizeIranianPhoneNumber(recipientPhone);
+  if (!normalizedPhone || normalizedPhone.length !== 11 || !normalizedPhone.startsWith('09')) {
+    return res.status(400).json({
+      success: false,
+      message: 'شماره تلفن همراه گیرنده نامعتبر است. فرمت صحیح: ۱۱ رقم به صورت ۰۹xxxxxxxxx (مثال: 09151234567).'
+    });
+  }
+
+  const messageText = testMessage?.trim() || `تست اتصال وب‌سرویس پیامک کارگاه گامون\nزمان: ${new Date().toLocaleTimeString('fa-IR')}`;
   const result = await sendRealSmsGateway({
-    recipients: [recipientPhone],
+    recipients: [normalizedPhone],
     message: messageText,
     config
   });
+
+  // Track last test timestamp and status
+  db.settings.smsLastTestAt = new Date().toISOString();
+  db.settings.smsLastTestStatus = result.success ? 'SUCCESS' : 'FAILED';
+  db.settings.smsLastTestTrackingCode = result.trackingCode || null;
+  db.settings.smsLastTestRecipient = normalizedPhone;
+  persistDb();
+
+  // Audit log WITHOUT credentials
+  logServerAudit(
+    user?.id || 'usr_admin',
+    user?.name || 'مدیر',
+    'تست ارسال پیامک',
+    'درگاه پیامک',
+    `تست ارسال پیامک به شماره ${normalizedPhone.slice(0, 4)}***${normalizedPhone.slice(-4)}: ${result.success ? 'موفق' : 'ناموفق'}`
+  );
 
   res.json(result);
 });
