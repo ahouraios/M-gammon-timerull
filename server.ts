@@ -2771,8 +2771,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`M.GAMMON Full-Stack Server running on port ${PORT}`);
+  app.listen(Number(PORT) || 3000, '0.0.0.0', () => {
+    console.log(`M.GAMMON Full-Stack Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
