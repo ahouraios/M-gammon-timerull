@@ -1861,6 +1861,22 @@ app.post('/api/bonuses', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Re
   res.json({ success: true, bonusPenalty: newBp });
 });
 
+app.delete('/api/bonuses/:id', requireRole('ADMIN', 'MANAGER'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (!db.bonusesPenalties) {
+    db.bonusesPenalties = [];
+  }
+  const prevLen = db.bonusesPenalties.length;
+  db.bonusesPenalties = db.bonusesPenalties.filter((b: any) => b.id !== id);
+  if (db.bonusesPenalties.length === prevLen) {
+    return res.status(404).json({ success: false, message: 'رکورد پاداش یا جریمه یافت نشد.' });
+  }
+  if (!persistDb()) {
+    return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی سرور' });
+  }
+  res.json({ success: true, message: 'رکورد پاداش/جریمه با موفقیت حذف شد.' });
+});
+
 // 10. Payroll & Salary Slips with Immutable Paid Records (Fixes PAY-001..PAY-006)
 app.get('/api/salaries', (req: Request, res: Response) => {
   const user = (req as any).user;
@@ -1918,6 +1934,12 @@ app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Reque
     .filter((a: any) => a.employeeId === emp.id && a.status === 'APPROVED' && (a.repayMonth?.replace(/-/g, '/') === normMonth))
     .reduce((sum: number, a: any) => sum + a.amount, 0);
 
+  const discretionaryAdvances = (db.bonusesPenalties || [])
+    .filter((b: any) => b.employeeId === emp.id && (b.type === 'DISCRETIONARY_ADVANCE' || b.type === 'EXTRA_ADVANCE') && (b.month?.replace(/-/g, '/') === normMonth))
+    .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
+
+  const totalAdvances = approvedAdvances + discretionaryAdvances;
+
   // Bonuses & Disciplinary Penalties
   const bonuses = (db.bonusesPenalties || [])
     .filter((b: any) => b.employeeId === emp.id && b.type === 'BONUS' && (b.month?.replace(/-/g, '/') === normMonth))
@@ -1951,7 +1973,7 @@ app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Reque
 
   const netSalary = Math.max(
     0,
-    grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances - miscDeductionsTotal + personalCardExpensesTotal
+    grossSalary - insuranceDeduction - taxDeduction - penalties - totalAdvances - miscDeductionsTotal + personalCardExpensesTotal
   );
 
   const newSlip = {
@@ -1965,7 +1987,8 @@ app.post('/api/salaries/calculate', requireRole('ADMIN', 'MANAGER'), (req: Reque
     overtimeAmount,
     bonusesTotal: bonuses,
     penaltiesTotal: penalties,
-    advancesTotal: approvedAdvances,
+    advancesTotal: totalAdvances,
+    discretionaryAdvancesTotal: discretionaryAdvances,
     personalCardExpensesTotal,
     miscDeductionsTotal,
     insuranceDeduction,

@@ -201,7 +201,18 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     }
   };
 
-  const getMethodBadge = (method?: string) => {
+  const getMethodBadge = (method?: string, rec?: AttendanceRecord) => {
+    if (rec?.isMissionStart) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-800 bg-sky-50 px-2.5 py-0.5 rounded-full border border-sky-200"
+          title={rec.missionDestination || 'مأموریت خارج از محیط کارگاه'}
+        >
+          <Briefcase className="w-3 h-3 text-sky-600" />
+          <span>مأموریت اول وقت{rec.missionDestination ? `: ${rec.missionDestination}` : ''}</span>
+        </span>
+      );
+    }
     if (!method) return null;
     if (method === 'QR_CAMERA_GPS') {
       return (
@@ -627,7 +638,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
                   <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
                     <span>تاریخ: <strong className="font-mono text-slate-600">{rec.date}</strong></span>
-                    <div>{getMethodBadge(rec.checkInMethod)}</div>
+                    <div>{getMethodBadge(rec.checkInMethod, rec)}</div>
                   </div>
                 </div>
               );
@@ -739,7 +750,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                         )}
                       </td>
                       <td className="py-3 px-4">{getStatusBadge(rec.status, rec.lateMinutes)}</td>
-                      <td className="py-3 px-4">{getMethodBadge(rec.checkInMethod)}</td>
+                      <td className="py-3 px-4">{getMethodBadge(rec.checkInMethod, rec)}</td>
                     </tr>
                   );
                 })
@@ -913,8 +924,17 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
       {/* WORK MISSION REGISTRATION MODAL */}
       {isMissionModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => {
+            setIsMissionModalOpen(false);
+            setMissionMsg(null);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                 <Briefcase className="w-4 h-4 text-amber-600" />
@@ -1075,8 +1095,14 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
       {/* MANUAL ATTENDANCE MODAL */}
       {isManualModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsManualModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                 <Clock className="w-4 h-4 text-indigo-600" />

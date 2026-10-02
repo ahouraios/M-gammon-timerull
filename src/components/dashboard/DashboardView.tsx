@@ -39,6 +39,10 @@ import {
   Database,
   Building2,
   Calendar,
+  Coins,
+  Gift,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -59,6 +63,7 @@ import {
   User,
   WorkerExpense,
   AuditLog,
+  ManagerAdjustmentType,
 } from '../../types';
 import {
   formatNumberFa,
@@ -106,7 +111,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Quick Action Registration Modal State
   const [isQuickRequestModalOpen, setIsQuickRequestModalOpen] = useState(false);
-  const [quickModalTab, setQuickModalTab] = useState<'LEAVE' | 'ADVANCE' | 'EXPENSE' | 'MANUAL_ATT'>('LEAVE');
+  const [quickModalTab, setQuickModalTab] = useState<'LEAVE' | 'ADVANCE' | 'EXPENSE' | 'MANUAL_ATT' | 'ADJUSTMENT'>('LEAVE');
   
   // Quick forms states
   const [selectedEmpId, setSelectedEmpId] = useState<string>(employees[0]?.id || '');
@@ -123,6 +128,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [quickAttIn, setQuickAttIn] = useState('07:00');
   const [quickAttOut, setQuickAttOut] = useState('16:00');
   const [quickAttReason, setQuickAttReason] = useState('');
+
+  const [quickAdjType, setQuickAdjType] = useState<ManagerAdjustmentType>('BONUS');
+  const [quickAdjAmount, setQuickAdjAmount] = useState<number | ''>('');
+  const [quickAdjTitle, setQuickAdjTitle] = useState('');
+  const [quickAdjDesc, setQuickAdjDesc] = useState('');
 
   // Hero Banner State
   const [bannerUrl, setBannerUrl] = useState<string>(() => {
@@ -401,6 +411,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         reason: quickAttReason.trim() || 'ثبت دستی تردد توسط مدیریت در داشبورد',
       });
       showFeedback(`تردد دستی برای ${emp.firstName} ${emp.lastName} با موفقیت ثبت شد.`);
+    } else if (quickModalTab === 'ADJUSTMENT') {
+      if (!quickAdjAmount || Number(quickAdjAmount) <= 0 || !quickAdjTitle.trim()) {
+        alert('لطفاً مبلغ معتبر و عنوان تعدیل را وارد فرمایید.');
+        return;
+      }
+      const currentMonth = getTodayShamsiDetailed().dateString.substring(0, 7);
+      StorageService.addBonusOrPenalty({
+        id: `bp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        companyId: settings.id,
+        employeeId: emp.id,
+        type: quickAdjType,
+        amount: Number(quickAdjAmount),
+        title: quickAdjTitle.trim(),
+        description: quickAdjDesc.trim(),
+        date: getTodayShamsi(),
+        month: currentMonth,
+        createdBy: currentUser?.name || currentUser?.username,
+        createdAt: new Date().toISOString(),
+      });
+      StorageService.calculateSalaryForEmployee(emp.id, currentMonth);
+      const typeLabel =
+        quickAdjType === 'BONUS'
+          ? 'پاداش تشویقی'
+          : quickAdjType === 'DISCRETIONARY_ADVANCE'
+          ? 'مساعده خارج از چارچوب'
+          : 'جریمه انضباطی';
+      showFeedback(`✓ ${typeLabel} به مبلغ ${formatCurrencyTomans(Number(quickAdjAmount))} برای ${emp.firstName} ${emp.lastName} ثبت و در فیش حقوقی دوره محاسبه گردید.`);
     }
 
     setIsQuickRequestModalOpen(false);
@@ -1146,6 +1183,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </button>
 
+          {/* Quick Action 5.5: Discretionary Adjustments */}
+          <button
+            type="button"
+            onClick={() => {
+              setQuickModalTab('ADJUSTMENT');
+              setIsQuickRequestModalOpen(true);
+            }}
+            className="p-3.5 rounded-2xl bg-indigo-50/70 hover:bg-indigo-100/90 text-indigo-950 border border-indigo-200/90 flex flex-col items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer group text-center"
+          >
+            <Coins className="w-5 h-5 text-indigo-600 group-hover:scale-110 transition-transform" />
+            <div className="min-w-0">
+              <span className="text-xs font-bold block truncate">پاداش / جریمه / مساعده</span>
+              <span className="text-[9px] text-indigo-700 font-medium block truncate">تعدیلات خارج چارچوب</span>
+            </div>
+          </button>
+
           {/* Quick Action 6: Excel Reports */}
           <button
             type="button"
@@ -1450,8 +1503,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* 7. QUICK ACTION REGISTRATION MODAL                        */}
       {/* ========================================================= */}
       {isQuickRequestModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsQuickRequestModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <button
@@ -1468,7 +1527,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             {/* Modal Sub-Tabs */}
-            <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 rounded-xl">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 p-1 bg-slate-100 rounded-xl">
               <button
                 type="button"
                 onClick={() => setQuickModalTab('LEAVE')}
@@ -1504,6 +1563,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 }`}
               >
                 تردد دستی
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuickModalTab('ADJUSTMENT')}
+                className={`py-2 text-xs font-bold rounded-lg transition-all cursor-pointer truncate col-span-2 sm:col-span-1 ${
+                  quickModalTab === 'ADJUSTMENT' ? 'bg-indigo-600 text-white shadow-xs' : 'text-indigo-800 bg-indigo-50/60 hover:bg-indigo-100'
+                }`}
+              >
+                پاداش / جریمه / مساعده
               </button>
             </div>
 
@@ -1664,6 +1732,109 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       value={quickAttReason}
                       onChange={(e) => setQuickAttReason(e.target.value)}
                       placeholder="ثبت دستی تردد توسط مدیریت"
+                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* TAB 5: ADJUSTMENT (BONUS, PENALTY, EXTRA ADVANCE) */}
+              {quickModalTab === 'ADJUSTMENT' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">نوع تعدیل مدیریتی:</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setQuickAdjType('BONUS')}
+                        className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                          quickAdjType === 'BONUS'
+                            ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-2 ring-emerald-500/20 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <TrendingUp className={`w-3.5 h-3.5 ${quickAdjType === 'BONUS' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                        <span className="text-[11px] font-bold">پاداش (+)</span>
+                        <span className="text-[9px] text-emerald-700 font-normal">افزایش به حقوق</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setQuickAdjType('DISCRETIONARY_ADVANCE')}
+                        className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                          quickAdjType === 'DISCRETIONARY_ADVANCE'
+                            ? 'bg-purple-50 border-purple-500 text-purple-900 ring-2 ring-purple-500/20 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Coins className={`w-3.5 h-3.5 ${quickAdjType === 'DISCRETIONARY_ADVANCE' ? 'text-purple-600' : 'text-slate-400'}`} />
+                        <span className="text-[11px] font-bold">مساعده ویژه (-)</span>
+                        <span className="text-[9px] text-purple-700 font-normal">خارج از چارچوب</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setQuickAdjType('PENALTY')}
+                        className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                          quickAdjType === 'PENALTY'
+                            ? 'bg-rose-50 border-rose-500 text-rose-900 ring-2 ring-rose-500/20 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <TrendingDown className={`w-3.5 h-3.5 ${quickAdjType === 'PENALTY' ? 'text-rose-600' : 'text-slate-400'}`} />
+                        <span className="text-[11px] font-bold">جریمه (-)</span>
+                        <span className="text-[9px] text-rose-700 font-normal">کسر از حقوق</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">مبلغ (تومان):</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      required
+                      value={quickAdjAmount}
+                      onChange={(e) => {
+                        const raw = toEnglishDigits(e.target.value).replace(/\D/g, '');
+                        setQuickAdjAmount(raw ? Number(raw) : '');
+                      }}
+                      placeholder="مثال: ۱,۵۰۰,۰۰۰"
+                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none font-mono text-left font-bold"
+                      dir="ltr"
+                    />
+                    {quickAdjAmount ? (
+                      <span className="text-[10px] text-slate-500 mt-1 block">
+                        معادل: {formatCurrencyTomans(Number(quickAdjAmount))}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">عنوان / موضوع:</label>
+                    <input
+                      type="text"
+                      required
+                      value={quickAdjTitle}
+                      onChange={(e) => setQuickAdjTitle(e.target.value)}
+                      placeholder={
+                        quickAdjType === 'BONUS'
+                          ? 'مثال: تسریع در تکمیل سفارش یا حسن کارکرد'
+                          : quickAdjType === 'DISCRETIONARY_ADVANCE'
+                          ? 'مثال: مساعده فوری خارج از سقف'
+                          : 'مثال: جریمه خسارت یا تاخیر غیرموجه'
+                      }
+                      className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">توضیحات و مستندات (اختیاری):</label>
+                    <input
+                      type="text"
+                      value={quickAdjDesc}
+                      onChange={(e) => setQuickAdjDesc(e.target.value)}
+                      placeholder="شرح علت برای ثبت دقیق در فیش دوره جاری"
                       className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none"
                     />
                   </div>

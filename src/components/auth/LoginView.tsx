@@ -447,18 +447,29 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </div>
 
           {/* Minimal Clean Footer */}
-          <div className="bg-slate-50/80 px-6 py-3.5 border-t border-slate-100 text-center">
+          <div className="bg-slate-50/80 px-6 py-3.5 border-t border-slate-100 flex flex-col items-center justify-center gap-1.5 text-center">
             <p className="text-[11px] text-slate-500 font-medium tracking-wide">
               سامانه جامع مدیریت تردد و پرسنلی M.GAMMON
             </p>
+            <DeveloperBadge variant="footer" className="text-[11px]" />
           </div>
 
         </div>
 
+        <div className="text-center mt-3">
+          <DeveloperBadge variant="footer" />
+        </div>
+
         {/* Biometric Fingerprint Sensor Modal */}
         {isBiometricModalOpen && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700/80 text-white rounded-3xl max-w-sm w-full p-6 text-center space-y-5 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 cursor-pointer"
+            onClick={() => setIsBiometricModalOpen(false)}
+          >
+            <div
+              className="bg-slate-900 border border-slate-700/80 text-white rounded-3xl max-w-sm w-full p-6 text-center space-y-5 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200 cursor-default"
+              onClick={(e) => e.stopPropagation()}
+            >
               <button
                 type="button"
                 onClick={() => setIsBiometricModalOpen(false)}

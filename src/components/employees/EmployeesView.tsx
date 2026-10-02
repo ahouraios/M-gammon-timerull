@@ -72,6 +72,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
   // Permissions: Only Senior Admin (ADMIN) can delete employees and see confidential staff
   const isSuperAdmin = currentUser?.role === 'ADMIN';
   const isManagerOnly = currentUser?.role === 'MANAGER';
+  const settings = StorageService.getSettings();
 
   // Modal states
   const modalFormRef = useRef<HTMLFormElement>(null);
@@ -172,6 +173,10 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
     isConfidential: false,
     permissions: [1, 2, 3, 4, 5, 6],
     managementRoles: [],
+    customWorkHoursEnabled: false,
+    workStartTime: settings.defaultWorkStartTime || '07:00',
+    workEndTime: settings.defaultWorkEndTime || '16:00',
+    thursdayEndTime: '13:00',
   };
 
   const [formData, setFormData] = useState<Omit<Employee, 'id' | 'companyId'>>(defaultFormData);
@@ -218,6 +223,10 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
       workshopId: 'ws_1',
       managementRoles: [],
       permissions: [1, 2, 3, 4, 5, 6],
+      customWorkHoursEnabled: false,
+      workStartTime: settings.defaultWorkStartTime || '07:00',
+      workEndTime: settings.defaultWorkEndTime || '16:00',
+      thursdayEndTime: '13:00',
     });
     setIsFormModalOpen(true);
   };
@@ -256,6 +265,10 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
       isConfidential: Boolean(emp.isConfidential),
       permissions: emp.permissions || [1, 2, 3, 4, 5, 6],
       managementRoles: emp.managementRoles || [],
+      customWorkHoursEnabled: Boolean(emp.customWorkHoursEnabled),
+      workStartTime: emp.workStartTime || settings.defaultWorkStartTime || '07:00',
+      workEndTime: emp.workEndTime || settings.defaultWorkEndTime || '16:00',
+      thursdayEndTime: emp.thursdayEndTime || '13:00',
     });
     setIsFormModalOpen(true);
   };
@@ -937,8 +950,14 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
       {/* DEDICATED EMPLOYEE PROFILE MODAL */}
       {viewingProfile && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setViewingProfile(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-2xl w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-slate-900 text-white p-6 relative">
               <button
                 onClick={() => setViewingProfile(null)}
@@ -1085,8 +1104,14 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
       {/* CREATE / EDIT EMPLOYEE MODAL */}
       {isFormModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsFormModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-xl w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                 <UserPlus className="w-4 h-4 text-indigo-600" />
@@ -1330,6 +1355,106 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                     <option value="INACTIVE">غیرفعال / قطع همکاری</option>
                     <option value="ON_LEAVE">در مرخصی استعلاجی / بلندمدت</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Working Hours Section (تنظیم و شخصی‌سازی ساعات کاری پرسنل) */}
+              <div className="bg-slate-50/80 border border-slate-200/90 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-bold text-slate-800">
+                      ساعات کاری پرسنل (ساعت ورود و خروج)
+                    </span>
+                  </div>
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-xl transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData.customWorkHoursEnabled)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setFormData({
+                          ...formData,
+                          customWorkHoursEnabled: checked,
+                          workStartTime: formData.workStartTime || settings.defaultWorkStartTime || '07:00',
+                          workEndTime: formData.workEndTime || settings.defaultWorkEndTime || '16:00',
+                          thursdayEndTime: formData.thursdayEndTime || '13:00',
+                        });
+                      }}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+                    />
+                    <span>ساعت کاری اختصاصی برای این نیرو</span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      ساعت شروع کار (ورود):
+                    </label>
+                    <input
+                      type="time"
+                      value={formData.workStartTime || settings.defaultWorkStartTime || '07:00'}
+                      onChange={(e) => setFormData({ ...formData, workStartTime: e.target.value })}
+                      className="w-full text-xs p-2 rounded-xl border border-slate-200 font-mono text-center bg-white focus:border-indigo-600 outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      پیش‌فرض کارگاه: {settings.defaultWorkStartTime || '07:00'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      ساعت پایان کار (خروج):
+                    </label>
+                    <input
+                      type="time"
+                      value={formData.workEndTime || settings.defaultWorkEndTime || '16:00'}
+                      onChange={(e) => setFormData({ ...formData, workEndTime: e.target.value })}
+                      className="w-full text-xs p-2 rounded-xl border border-slate-200 font-mono text-center bg-white focus:border-indigo-600 outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      پیش‌فرض کارگاه: {settings.defaultWorkEndTime || '16:00'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      ساعت خروج پنجشنبه:
+                    </label>
+                    <input
+                      type="time"
+                      value={formData.thursdayEndTime || '13:00'}
+                      onChange={(e) => setFormData({ ...formData, thursdayEndTime: e.target.value })}
+                      className="w-full text-xs p-2 rounded-xl border border-slate-200 font-mono text-center bg-white focus:border-indigo-600 outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      پایان شیفت پنجشنبه‌ها
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 text-[11px] flex-wrap gap-2">
+                  <span className="text-slate-500">
+                    {formData.customWorkHoursEnabled
+                      ? '⚡ این پرسنل طبق ساعات اختصاصی فوق محاسبه تردد و تاخیر خواهد شد.'
+                      : '✅ ساعات کاری برابر با تنظیمات پیش‌فرض کارگاه است.'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData({
+                        ...formData,
+                        customWorkHoursEnabled: false,
+                        workStartTime: settings.defaultWorkStartTime || '07:00',
+                        workEndTime: settings.defaultWorkEndTime || '16:00',
+                        thursdayEndTime: '13:00',
+                      });
+                    }}
+                    className="text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer underline text-[10px]"
+                  >
+                    بازنشانی به پیش‌فرض کارگاه
+                  </button>
                 </div>
               </div>
 
@@ -1713,8 +1838,14 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
       {/* MANAGEMENT ROLES & PERMISSIONS MODAL */}
       {managingPermissionsEmp && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 my-auto text-right">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto cursor-pointer"
+          onClick={() => setManagingPermissionsEmp(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 my-auto text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             
             {/* Modal Header */}
             <div className="bg-indigo-950 text-white p-5 flex items-center justify-between">
@@ -1833,8 +1964,14 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
       {/* EMPLOYEE DELETION CONFIRMATION MODAL */}
       {employeeToDelete && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full border border-rose-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-right">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setEmployeeToDelete(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full border border-rose-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-rose-600 text-white p-5 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">

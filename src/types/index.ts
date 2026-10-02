@@ -142,6 +142,10 @@ export interface Employee {
   isConfidential?: boolean; // مدیریت شخصی/اختصاصی توسط مدیر ارشد (مخفی کامل از مدیر منابع انسانی)
   permissions?: number[]; // سطوح دسترسی
   managementRoles?: string[]; // نقش‌های اختیارات مدیریتی
+  customWorkHoursEnabled?: boolean; // ساعات کاری اختصاصی برای این پرسنل
+  workStartTime?: string; // ساعت شروع به کار (مثال: 07:00)
+  workEndTime?: string; // ساعت پایان کار (مثال: 16:00)
+  thursdayEndTime?: string; // ساعت خروج پنجشنبه (مثال: 13:00)
 }
 
 export interface Shift {
@@ -179,6 +183,10 @@ export interface AttendanceRecord {
   approvedAt?: string;
   manualReason?: string;
   notes?: string;
+  isMissionStart?: boolean; // آیا شروع کار از اول صبح به عنوان مأموریت بوده است؟
+  isMission?: boolean; // نشانگر وضعیت مأموریت روزانه
+  missionDestination?: string; // مقصد مأموریت اول وقت یا روزانه
+  missionDescription?: string; // شرح مأموریت
   verifiedLocation?: {
     lat: number;
     lng: number;
@@ -278,16 +286,20 @@ export interface WorkMission {
   createdBy?: string;
 }
 
+export type ManagerAdjustmentType = 'BONUS' | 'PENALTY' | 'DISCRETIONARY_ADVANCE';
+
 export interface BonusOrPenalty {
   id: string;
   companyId: string;
   employeeId: string;
-  type: 'BONUS' | 'PENALTY';
+  type: ManagerAdjustmentType;
   amount: number; // Tomans
   date: string;
   month: string; // e.g. 1405/07
   title: string;
   description?: string;
+  createdAt?: string;
+  createdBy?: string;
 }
 
 export interface SalaryRecord {
@@ -303,6 +315,7 @@ export interface SalaryRecord {
   bonusesTotal: number;
   penaltiesTotal: number;
   advancesTotal: number;
+  discretionaryAdvancesTotal?: number; // مساعده خارج از چارچوب مدیریتی
   personalCardExpensesTotal?: number; // هزینه پرداخت‌شده از کارت شخصی کارگر (اضافه‌شده به حقوق)
   miscDeductionsTotal?: number; // کسورات پرداخت‌های متفرقه که گزینه کسر از حقوق فعال بوده
   insuranceDeduction: number;

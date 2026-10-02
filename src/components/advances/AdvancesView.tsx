@@ -1149,8 +1149,14 @@ export const AdvancesView: React.FC<AdvancesViewProps> = ({
 
       {/* VIEW RECEIPT IMAGE MODAL */}
       {viewingReceipt && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-5 space-y-4 shadow-2xl border border-slate-200 text-right animate-in zoom-in-95">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setViewingReceipt(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-lg w-full p-5 space-y-4 shadow-2xl border border-slate-200 text-right animate-in zoom-in-95 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
                 <Receipt className="w-4 h-4 text-emerald-600" />

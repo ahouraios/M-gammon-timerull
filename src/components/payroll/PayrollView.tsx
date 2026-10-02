@@ -8,12 +8,23 @@ import {
   Gift,
   Eye,
   X,
+  Coins,
+  Trash2,
+  AlertCircle,
+  HelpCircle,
+  TrendingUp,
+  TrendingDown,
+  Info,
+  DollarSign,
+  PlusCircle,
+  FileText,
 } from 'lucide-react';
-import { SalaryRecord, Employee, User as AppUser } from '../../types';
+import { SalaryRecord, Employee, User as AppUser, ManagerAdjustmentType, BonusOrPenalty } from '../../types';
 import { StorageService } from '../../services/storage';
 import {
   formatCurrencyTomans,
-  getTodayShamsiDetailed
+  getTodayShamsiDetailed,
+  toEnglishDigits
 } from '../../utils/dateUtils';
 import { DeveloperBadge } from '../common/DeveloperBadge';
 
@@ -36,6 +47,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
   const currentMonthStr = shamsiDetail.dateString.substring(0, 7);
 
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
+  const [payrollSubTab, setPayrollSubTab] = useState<'SLIPS' | 'ADJUSTMENTS'>('SLIPS');
   const [viewingPayslip, setViewingPayslip] = useState<SalaryRecord | null>(null);
   const [isBonusPenaltyModalOpen, setIsBonusPenaltyModalOpen] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -53,10 +65,17 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
     };
   }).reverse();
 
-  // Bonus or penalty form
-  const [bpForm, setBpForm] = useState({
+  // Bonus, Penalty or Discretionary Advance form
+  const [bpForm, setBpForm] = useState<{
+    employeeId: string;
+    type: ManagerAdjustmentType;
+    amount: number;
+    title: string;
+    description: string;
+    month: string;
+  }>({
     employeeId: employees[0]?.id || '',
-    type: 'BONUS' as 'BONUS' | 'PENALTY',
+    type: 'BONUS',
     amount: 1500000,
     title: '',
     description: '',
@@ -71,6 +90,23 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
     }
     return s.month === selectedMonth;
   });
+
+  const allAdjustments = StorageService.getBonusesAndPenalties(currentUser);
+  const currentMonthAdjustments = allAdjustments.filter(
+    (b) => b.month?.replace(/-/g, '/') === selectedMonth.replace(/-/g, '/')
+  );
+
+  const currentMonthBonuses = currentMonthAdjustments
+    .filter((b) => b.type === 'BONUS')
+    .reduce((sum, b) => sum + b.amount, 0);
+
+  const currentMonthDiscretionaryAdvances = currentMonthAdjustments
+    .filter((b) => b.type === 'DISCRETIONARY_ADVANCE' || (b as any).type === 'EXTRA_ADVANCE')
+    .reduce((sum, b) => sum + b.amount, 0);
+
+  const currentMonthPenalties = currentMonthAdjustments
+    .filter((b) => b.type === 'PENALTY')
+    .reduce((sum, b) => sum + b.amount, 0);
 
   // Calculate salary for all employees for the selected month
   const handleCalculateAll = () => {
@@ -107,26 +143,46 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
 
   const handleAddBonusPenalty = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bpForm.title) return;
+    if (!bpForm.title.trim() || !bpForm.amount || bpForm.amount <= 0) return;
     const settings = StorageService.getSettings();
     const today = getTodayShamsiDetailed().dateString;
 
     StorageService.addBonusOrPenalty({
-      id: `bp_${Date.now()}`,
+      id: `bp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       companyId: settings.id,
       employeeId: bpForm.employeeId,
       type: bpForm.type,
-      amount: bpForm.amount,
-      title: bpForm.title,
-      description: bpForm.description,
+      amount: Math.round(Number(bpForm.amount)),
+      title: bpForm.title.trim(),
+      description: bpForm.description?.trim(),
       date: today,
       month: bpForm.month,
+      createdBy: currentUser.name || currentUser.username,
+      createdAt: new Date().toISOString(),
     });
 
     // Auto recalculate that employee's salary
     StorageService.calculateSalaryForEmployee(bpForm.employeeId, bpForm.month);
     setIsBonusPenaltyModalOpen(false);
     onRefresh();
+    setActionMessage(
+      bpForm.type === 'BONUS'
+        ? '✓ پاداش تشویقی با موفقیت ثبت شد و به حقوق اضافه گردید.'
+        : bpForm.type === 'DISCRETIONARY_ADVANCE'
+        ? '✓ مساعده خارج از چارچوب ثبت شد و از خالص حقوق دوره کسر گردید.'
+        : '✓ جریمه انضباطی ثبت شد و در کسورات حقوق اعمال گردید.'
+    );
+    setTimeout(() => setActionMessage(null), 4000);
+  };
+
+  const handleDeleteBonusPenalty = (id: string, empId: string, month: string) => {
+    if (confirm('آیا از حذف این تعدیل مالی اطمینان دارید؟ حقوق پرسنل برای این دوره مجدداً محاسبه و تراز خواهد شد.')) {
+      StorageService.deleteBonusOrPenalty(id);
+      StorageService.calculateSalaryForEmployee(empId, month);
+      onRefresh();
+      setActionMessage('✓ مورد انتخابی حذف شد و حقوق پرسنل به‌روزرسانی گردید.');
+      setTimeout(() => setActionMessage(null), 3000);
+    }
   };
 
   const getStatusBadge = (status: SalaryRecord['status']) => {
@@ -156,6 +212,14 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
     ? employees.find((e) => e.id === viewingPayslip.employeeId)
     : null;
 
+  const payslipAdjustments = viewingPayslip
+    ? StorageService.getAllBonusesPenaltiesRaw().filter(
+        (b) =>
+          b.employeeId === viewingPayslip.employeeId &&
+          b.month?.replace(/-/g, '/') === viewingPayslip.month?.replace(/-/g, '/')
+      )
+    : [];
+
   return (
     <div className="space-y-6 w-full max-w-full">
       {actionMessage && (
@@ -173,17 +237,20 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
             <span>محاسبه حقوق و صدور فیش رسمی</span>
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            موتور هوشمند محاسبه اضافه‌کاری، حق مسکن، بن خواروبار، بیمه و کسر مساعده
+            موتور هوشمند محاسبه اضافه‌کاری، حق مسکن، بن خواروبار، بیمه، کسر مساعده، پاداش‌ها و جرایم مدیریتی
           </p>
         </div>
         {canManage && (
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => setIsBonusPenaltyModalOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 text-xs font-semibold transition-colors cursor-pointer border border-slate-200"
+              onClick={() => {
+                setBpForm((prev) => ({ ...prev, month: selectedMonth }));
+                setIsBonusPenaltyModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold transition-colors cursor-pointer border border-indigo-200 shadow-2xs"
             >
-              <Gift className="w-4 h-4 text-indigo-600" />
-              <span>ثبت پاداش / جریمه</span>
+              <Coins className="w-4 h-4 text-indigo-600" />
+              <span>ثبت پاداش، جریمه یا مساعده خارج از چارچوب</span>
             </button>
             <button
               onClick={handleCalculateAll}
@@ -221,7 +288,232 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
         </span>
       </div>
 
-      {/* Payroll: Cards (Mobile) & Table (Desktop) */}
+      {/* Sub-Tabs: Salary Slips vs Manager Adjustments */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          type="button"
+          onClick={() => setPayrollSubTab('SLIPS')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            payrollSubTab === 'SLIPS'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <CreditCard className="w-4 h-4" />
+          <span>فیش‌های حقوق و دستمزد ({filteredSalaries.length})</span>
+        </button>
+
+        {canManage && (
+          <button
+            type="button"
+            onClick={() => setPayrollSubTab('ADJUSTMENTS')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              payrollSubTab === 'ADJUSTMENTS'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Coins className="w-4 h-4 text-amber-500" />
+            <span>پاداش، جریمه و مساعده خارج از چارچوب ({currentMonthAdjustments.length})</span>
+          </button>
+        )}
+      </div>
+
+      {/* VIEW 1: DISCRETIONARY ADJUSTMENTS MANAGEMENT */}
+      {payrollSubTab === 'ADJUSTMENTS' && canManage && (
+        <div className="space-y-4">
+          {/* Summary Metric Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-4 flex items-center justify-between shadow-2xs">
+              <div>
+                <span className="text-xs text-emerald-800 font-bold block mb-1">مجموع پاداش‌های تشویقی دوره:</span>
+                <span className="text-lg font-black text-emerald-900 font-mono">
+                  +{formatCurrencyTomans(currentMonthBonuses)}
+                </span>
+                <span className="text-[10px] text-emerald-700 block mt-0.5 font-normal">افزایش به خالص حقوق</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+            </div>
+
+            <div className="bg-purple-50/80 border border-purple-200/90 rounded-2xl p-4 flex items-center justify-between shadow-2xs">
+              <div>
+                <span className="text-xs text-purple-800 font-bold block mb-1">مساعده‌های خارج از چارچوب دوره:</span>
+                <span className="text-lg font-black text-purple-900 font-mono">
+                  -{formatCurrencyTomans(currentMonthDiscretionaryAdvances)}
+                </span>
+                <span className="text-[10px] text-purple-700 block mt-0.5 font-normal">منظور در سرفصل کسر مساعده</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
+                <Coins className="w-5 h-5" />
+              </div>
+            </div>
+
+            <div className="bg-rose-50/80 border border-rose-200/90 rounded-2xl p-4 flex items-center justify-between shadow-2xs">
+              <div>
+                <span className="text-xs text-rose-800 font-bold block mb-1">مجموع جرایم انضباطی دوره:</span>
+                <span className="text-lg font-black text-rose-900 font-mono">
+                  -{formatCurrencyTomans(currentMonthPenalties)}
+                </span>
+                <span className="text-[10px] text-rose-700 block mt-0.5 font-normal">منظور در سرفصل کسورات انضباطی</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                <TrendingDown className="w-5 h-5" />
+              </div>
+            </div>
+          </div>
+
+          {/* Adjustments Table Card */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-indigo-600" />
+                  <span>لیست پاداش‌ها، جرایم و مساعده‌های خارج از چارچوب دوره {selectedMonth}</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  کلیه این اقلام مستقیماً در فیش حقوقی محاسبه شده و بدون ایجاد هیچگونه اختلال یا مغایرت دفتری اعمال می‌شوند.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setBpForm((prev) => ({ ...prev, month: selectedMonth }));
+                  setIsBonusPenaltyModalOpen(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer self-start sm:self-auto shadow-xs"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>ثبت مورد جدید برای این دوره</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200/80 font-semibold">
+                  <tr>
+                    <th className="py-3 px-4">پرسنل</th>
+                    <th className="py-3 px-4">نوع تعدیل مدیریتی</th>
+                    <th className="py-3 px-4">مبلغ (تومان)</th>
+                    <th className="py-3 px-4">عنوان و موضوع</th>
+                    <th className="py-3 px-4">شرح / مستندات</th>
+                    <th className="py-3 px-4">ماه اعمال</th>
+                    <th className="py-3 px-4">تاریخ ثبت</th>
+                    <th className="py-3 px-4">وضعیت در فیش</th>
+                    <th className="py-3 px-4 text-center">عملیات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {currentMonthAdjustments.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-10 text-center text-slate-400">
+                        هیچ پاداش، جریمه یا مساعده خارج از چارچوبی برای دوره {selectedMonth} ثبت نشده است.
+                      </td>
+                    </tr>
+                  ) : (
+                    currentMonthAdjustments.map((adj) => {
+                      const emp = employees.find((e) => e.id === adj.employeeId);
+                      return (
+                        <tr key={adj.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="py-3 px-4 font-bold text-slate-900">
+                            {emp ? `${emp.firstName} ${emp.lastName}` : adj.employeeId}
+                            <span className="block text-[11px] font-normal text-slate-400 font-mono">
+                              {emp?.personalCode} - {emp?.department}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
+                                adj.type === 'BONUS'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : adj.type === 'DISCRETIONARY_ADVANCE'
+                                  ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+                              }`}
+                            >
+                              {adj.type === 'BONUS' && <TrendingUp className="w-3 h-3" />}
+                              {adj.type === 'DISCRETIONARY_ADVANCE' && <Coins className="w-3 h-3" />}
+                              {adj.type === 'PENALTY' && <TrendingDown className="w-3 h-3" />}
+                              <span>
+                                {adj.type === 'BONUS'
+                                  ? 'پاداش تشویقی (+)'
+                                  : adj.type === 'DISCRETIONARY_ADVANCE'
+                                  ? 'مساعده خارج از چارچوب (-)'
+                                  : 'جریمه انضباطی (-)'}
+                              </span>
+                            </span>
+                          </td>
+                          <td
+                            className={`py-3 px-4 font-mono font-bold text-sm ${
+                              adj.type === 'BONUS' ? 'text-emerald-600' : 'text-rose-600'
+                            }`}
+                          >
+                            {adj.type === 'BONUS' ? '+' : '-'}{formatCurrencyTomans(adj.amount)}
+                          </td>
+                          <td className="py-3 px-4 font-semibold text-slate-800">
+                            {adj.title}
+                          </td>
+                          <td className="py-3 px-4 text-slate-500 max-w-xs truncate">
+                            {adj.description || '---'}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-600">
+                            {adj.month}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-500 text-[11px]">
+                            {adj.date}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>اعمال در محاسبات</span>
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteBonusPenalty(adj.id, adj.employeeId, adj.month)}
+                              className="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="حذف و محاسبه مجدد حقوق"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Informative Accounting Box */}
+          <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 space-y-2">
+            <div className="font-bold flex items-center gap-1.5 text-amber-950">
+              <Info className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>نحوه عملکرد و یکپارچگی محاسبات مالی (تضمین عدم بروز اختلاف):</span>
+            </div>
+            <ul className="list-disc list-inside space-y-1 text-amber-900/90 leading-relaxed pr-2">
+              <li>
+                <strong>پاداش تشویقی و حق‌الزحمه ویژه:</strong> در ردیف مزایا به حقوق ناخالص و خالص افزوده شده و سقف و کف قانونی را رعایت می‌کند.
+              </li>
+              <li>
+                <strong>مساعده خارج از چارچوب:</strong> با دستور مستقیم مدیر و بدون نیاز به فرم درخواست پرسنل یا محدودیت سقف پرداختی اعمال می‌شود و مستقیماً در سرفصل کسر مساعده قرار می‌گیرد تا دریافتی کارگر و تراز کارگاه کاملاً همخوان باشند.
+              </li>
+              <li>
+                <strong>جریمه انضباطی و کسر کار اختصاصی:</strong> در سرفصل کسورات انضباطی ثبت شده و از خالص پرداختی پرسنل کسر می‌گردد.
+              </li>
+              <li>
+                در صورت حذف هر مورد توسط مدیر، فیش حقوقی پرسنل بلافاصله مجدداً به صورت اتوماتیک محاسبه و تراز می‌شود.
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 2: SALARY SLIPS (CARDS & TABLE) */}
+      {payrollSubTab === 'SLIPS' && (
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
         {/* Mobile View: Cards */}
         <div className="block md:hidden divide-y divide-slate-100">
@@ -361,11 +653,18 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
           </table>
         </div>
       </div>
+      )}
 
       {/* OFFICIAL PERSIAN PAYSLIP MODAL */}
       {viewingPayslip && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setViewingPayslip(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-2xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Controls Bar */}
             <div className="px-6 py-3.5 bg-slate-900 text-white flex items-center justify-between print:hidden">
               <div className="flex items-center gap-2">
@@ -495,7 +794,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                     )}
                     {viewingPayslip.bonusesTotal > 0 && (
                       <div className="flex justify-between py-1 border-b border-slate-100 text-emerald-600 font-semibold">
-                        <span>پاداش عملکرد و تسریع:</span>
+                        <span>پاداش عملکرد و تشویقی:</span>
                         <span className="font-mono">
                           +{formatCurrencyTomans(viewingPayslip.bonusesTotal)}
                         </span>
@@ -543,7 +842,14 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                     )}
                     {viewingPayslip.advancesTotal > 0 && (
                       <div className="flex justify-between py-1 border-b border-slate-100 text-rose-700 font-semibold">
-                        <span>کسر مساعده دریافتی:</span>
+                        <div>
+                          <span>کسر مساعده دریافتی:</span>
+                          {viewingPayslip.discretionaryAdvancesTotal && viewingPayslip.discretionaryAdvancesTotal > 0 ? (
+                            <span className="block text-[10px] text-purple-700 font-normal">
+                              (شامل {formatCurrencyTomans(viewingPayslip.discretionaryAdvancesTotal)} مساعده خارج از چارچوب)
+                            </span>
+                          ) : null}
+                        </div>
                         <span className="font-mono">
                           -{formatCurrencyTomans(viewingPayslip.advancesTotal)}
                         </span>
@@ -586,6 +892,43 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                 </div>
               </div>
 
+              {/* Itemized Discretionary Adjustments in Payslip */}
+              {payslipAdjustments.length > 0 && (
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/70 p-3.5 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                    <span className="flex items-center gap-1.5">
+                      <Coins className="w-4 h-4 text-indigo-600" />
+                      <span>ریز اقلام پاداش، جریمه و مساعده خارج از چارچوب (مدیریتی):</span>
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-normal">منظور شده در سرفصل‌های فوق</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {payslipAdjustments.map((adj) => (
+                      <div key={adj.id} className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-slate-200/80">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            adj.type === 'BONUS'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : adj.type === 'DISCRETIONARY_ADVANCE'
+                              ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                              : 'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}>
+                            {adj.type === 'BONUS' ? 'پاداش تشویقی (+)' : adj.type === 'DISCRETIONARY_ADVANCE' ? 'مساعده خارج از چارچوب (-)' : 'جریمه انضباطی (-)'}
+                          </span>
+                          <span className="font-semibold text-slate-800">{adj.title}</span>
+                          {adj.description && <span className="text-[11px] text-slate-500">({adj.description})</span>}
+                        </div>
+                        <span className={`font-mono font-bold ${
+                          adj.type === 'BONUS' ? 'text-emerald-600' : 'text-rose-600'
+                        }`}>
+                          {adj.type === 'BONUS' ? '+' : '-'}{formatCurrencyTomans(adj.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Net Salary Highlight Box */}
               <div className="p-5 rounded-2xl bg-indigo-50 border-2 border-indigo-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
@@ -624,14 +967,20 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
         </div>
       )}
 
-      {/* BONUS / PENALTY MODAL */}
+      {/* BONUS / PENALTY / DISCRETIONARY ADVANCE MODAL */}
       {isBonusPenaltyModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsBonusPenaltyModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-                <Gift className="w-4 h-4 text-indigo-600" />
-                <span>ثبت پاداش یا جریمه انضباطی پرسنل</span>
+                <Coins className="w-4 h-4 text-indigo-600" />
+                <span>ثبت پاداش، جریمه یا مساعده خارج از چارچوب</span>
               </h3>
               <button
                 onClick={() => setIsBonusPenaltyModalOpen(false)}
@@ -642,69 +991,179 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
             </div>
 
             <form onSubmit={handleAddBonusPenalty} className="p-6 space-y-4">
+              {/* Type Selection - 3 Clean Cards */}
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">پرسنل هدف</label>
-                <select
-                  value={bpForm.employeeId}
-                  onChange={(e) => setBpForm({ ...bpForm, employeeId: e.target.value })}
-                  className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 bg-white"
-                >
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.firstName} {emp.lastName} ({emp.department})
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">نوع تعدیل مدیریتی:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBpForm({ ...bpForm, type: 'BONUS' })}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                      bpForm.type === 'BONUS'
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-2 ring-emerald-500/20 shadow-xs'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <TrendingUp className={`w-4 h-4 ${bpForm.type === 'BONUS' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                    <span className="text-xs font-bold">پاداش تشویقی</span>
+                    <span className="text-[10px] text-emerald-700 font-normal">افزایش به حقوق (+)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBpForm({ ...bpForm, type: 'DISCRETIONARY_ADVANCE' })}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                      bpForm.type === 'DISCRETIONARY_ADVANCE'
+                        ? 'bg-purple-50 border-purple-500 text-purple-900 ring-2 ring-purple-500/20 shadow-xs'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Coins className={`w-4 h-4 ${bpForm.type === 'DISCRETIONARY_ADVANCE' ? 'text-purple-600' : 'text-slate-400'}`} />
+                    <span className="text-xs font-bold">مساعده ویژه</span>
+                    <span className="text-[10px] text-purple-700 font-normal">خارج از چارچوب (-)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBpForm({ ...bpForm, type: 'PENALTY' })}
+                    className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                      bpForm.type === 'PENALTY'
+                        ? 'bg-rose-50 border-rose-500 text-rose-900 ring-2 ring-rose-500/20 shadow-xs'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <TrendingDown className={`w-4 h-4 ${bpForm.type === 'PENALTY' ? 'text-rose-600' : 'text-slate-400'}`} />
+                    <span className="text-xs font-bold">جریمه انضباطی</span>
+                    <span className="text-[10px] text-rose-700 font-normal">کسر از حقوق (-)</span>
+                  </button>
+                </div>
               </div>
 
+              {/* Informative Callout for Selected Type */}
+              <div className={`p-2.5 rounded-xl text-[11px] leading-relaxed border ${
+                bpForm.type === 'BONUS'
+                  ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                  : bpForm.type === 'DISCRETIONARY_ADVANCE'
+                  ? 'bg-purple-50/70 border-purple-200 text-purple-900'
+                  : 'bg-rose-50/70 border-rose-200 text-rose-900'
+              }`}>
+                {bpForm.type === 'BONUS' && (
+                  <p>
+                    <strong>اثر حسابداری:</strong> این مبلغ به عنوان پاداش تشویقی و حق‌الزحمه ویژه به حقوق ناخالص افزوده شده و دریافتی نهایی پرسنل را افزایش می‌دهد.
+                  </p>
+                )}
+                {bpForm.type === 'DISCRETIONARY_ADVANCE' && (
+                  <p>
+                    <strong>اثر حسابداری:</strong> مساعده با تصمیم مستقیم مدیر و بدون نیاز به فرم درخواست پرسنل یا محدودیت سقف پرداخت شده و در سرفصل کسر مساعده همین دوره منظور می‌گردد تا حساب‌ها تراز بماند.
+                  </p>
+                )}
+                {bpForm.type === 'PENALTY' && (
+                  <p>
+                    <strong>اثر حسابداری:</strong> این مبلغ مستقیماً در سرفصل کسورات انضباطی فیش حقوقی ثبت شده و از خالص پرداختی پرسنل کسر می‌گردد.
+                  </p>
+                )}
+              </div>
+
+              {/* Employee and Month Selection */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">نوع تعدیل</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">پرسنل هدف:</label>
                   <select
-                    value={bpForm.type}
-                    onChange={(e) => setBpForm({ ...bpForm, type: e.target.value as any })}
-                    className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 bg-white font-semibold"
+                    value={bpForm.employeeId}
+                    onChange={(e) => setBpForm({ ...bpForm, employeeId: e.target.value })}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 bg-white"
                   >
-                    <option value="BONUS">پاداش تشویقی (+)</option>
-                    <option value="PENALTY">جریمه انضباطی (-)</option>
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.firstName} {emp.lastName} ({emp.department})
+                      </option>
+                    ))}
                   </select>
                 </div>
+
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">مبلغ (تومان)</label>
-                  <input
-                    type="number"
-                    required
-                    value={bpForm.amount}
-                    onChange={(e) => setBpForm({ ...bpForm, amount: Number(e.target.value) })}
-                    className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 mb-1">دوره اعمال در حقوق:</label>
+                  <select
+                    value={bpForm.month}
+                    onChange={(e) => setBpForm({ ...bpForm, month: e.target.value })}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 bg-white font-bold"
+                  >
+                    {monthOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
+              {/* Amount Input with Fast Shortcuts */}
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">عنوان</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  مبلغ (تومان):
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  required
+                  value={bpForm.amount ? bpForm.amount.toString() : ''}
+                  onChange={(e) => {
+                    const raw = toEnglishDigits(e.target.value).replace(/\D/g, '');
+                    setBpForm({ ...bpForm, amount: raw ? Number(raw) : 0 });
+                  }}
+                  placeholder="مثال: ۲,۵۰۰,۰۰۰"
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono text-left font-bold"
+                  dir="ltr"
+                />
+                <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1">
+                  <span>معادل: {formatCurrencyTomans(bpForm.amount || 0)}</span>
+                  <div className="flex items-center gap-1">
+                    {[1000000, 2000000, 5000000].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setBpForm({ ...bpForm, amount: preset })}
+                        className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold cursor-pointer"
+                      >
+                        {preset / 1000000} م
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">عنوان و موضوع:</label>
                 <input
                   type="text"
                   required
                   value={bpForm.title}
                   onChange={(e) => setBpForm({ ...bpForm, title: e.target.value })}
-                  placeholder="مثال: تسریع در تکمیل سفارش کارگاه"
-                  className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500"
+                  placeholder={
+                    bpForm.type === 'BONUS'
+                      ? 'مثال: تسریع در تکمیل سفارش یا حسن انجام کار'
+                      : bpForm.type === 'DISCRETIONARY_ADVANCE'
+                      ? 'مثال: مساعده فوری درمان یا علی‌الحساب خارج از سقف'
+                      : 'مثال: جریمه خسارت ابزار یا تاخیر غیرموجه'
+                  }
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
+              {/* Description */}
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">توضیحات و مستندات</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">توضیحات و مستندات:</label>
                 <textarea
                   rows={2}
                   value={bpForm.description}
                   onChange={(e) => setBpForm({ ...bpForm, description: e.target.value })}
-                  placeholder="علت تشویق یا تنبیه را شرح دهید..."
-                  className="w-full text-xs p-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500"
+                  placeholder="علت، مستندات یا توافق صورت‌گرفته با پرسنل را شرح دهید..."
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setIsBonusPenaltyModalOpen(false)}
@@ -716,7 +1175,7 @@ export const PayrollView: React.FC<PayrollViewProps> = ({
                   type="submit"
                   className="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 cursor-pointer shadow-xs"
                 >
-                  ثبت و اعمال در حقوق
+                  ثبت و اعمال فوری در حقوق
                 </button>
               </div>
             </form>

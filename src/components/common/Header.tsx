@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Bell,
   Clock,
@@ -48,6 +48,32 @@ export const Header: React.FC<HeaderProps> = ({
   const shamsi = getTodayShamsiDetailed();
   const [timeStr, setTimeStr] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click or touch
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
+      if (dropdownOpen && userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && dropdownOpen) {
+        setDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [dropdownOpen]);
+
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
@@ -281,7 +307,7 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="h-6 w-px bg-slate-200 mx-1 hidden sm:block" />
 
             {/* Switch User / Role Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={userMenuRef}>
               <button
                 onClick={() => setDropdownOpen(!dropdownOpen)}
                 className="flex items-center gap-2 pl-2 sm:pl-3 pr-2 py-1.5 rounded-xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 transition-all text-right cursor-pointer"

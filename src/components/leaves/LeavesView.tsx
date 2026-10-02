@@ -424,8 +424,14 @@ export const LeavesView: React.FC<LeavesViewProps> = ({
 
       {/* REJECT MODAL */}
       {rejectingId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 p-5 space-y-4 shadow-xl">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setRejectingId(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full border border-slate-200 p-5 space-y-4 shadow-xl cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 className="text-sm font-bold text-slate-800">علت عدم تایید مرخصی:</h3>
             <textarea
               rows={3}
@@ -456,8 +462,14 @@ export const LeavesView: React.FC<LeavesViewProps> = ({
 
       {/* DELETE CONFIRMATION MODAL */}
       {deletingLeaveId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl max-w-sm w-full border border-slate-200 p-5 space-y-4 shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 cursor-pointer"
+          onClick={() => setDeletingLeaveId(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-sm w-full border border-slate-200 p-5 space-y-4 shadow-2xl cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-3 text-rose-600">
               <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
                 <Trash2 className="w-5 h-5 text-rose-600" />
@@ -489,8 +501,14 @@ export const LeavesView: React.FC<LeavesViewProps> = ({
 
       {/* SUBMIT LEAVE REQUEST MODAL */}
       {isSubmitModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-visible animate-in fade-in zoom-in-95 duration-150 relative">
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsSubmitModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-visible animate-in fade-in zoom-in-95 duration-150 relative cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 rounded-t-2xl">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                 <PlaneTakeoff className="w-4 h-4 text-indigo-600" />

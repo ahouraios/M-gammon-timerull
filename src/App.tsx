@@ -308,17 +308,34 @@ export default function App() {
           )}
 
           {activeTab === 'employee-portal' && (
-            <EmployeePortalView
-              currentUser={currentUser}
-              employees={employees}
-              attendance={attendance}
-              leaves={leaves}
-              advances={advances}
-              salaries={salaries}
-              onRefresh={loadData}
-              onNavigate={setActiveTab}
-              onLogout={handleLogout}
-            />
+            <div className="space-y-4">
+              {currentUser.role !== 'EMPLOYEE' && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-xs text-amber-900">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold">حالت پیش‌نمایش پرتال پرسنل (تست کاربری مدیر)</span>
+                    <span className="text-[11px] text-amber-700 hidden sm:inline">این صفحه نمای اختصاصی پرسنل کارگاه است.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dashboard')}
+                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold cursor-pointer transition-colors shadow-2xs"
+                  >
+                    بازگشت به پنل مدیریت
+                  </button>
+                </div>
+              )}
+              <EmployeePortalView
+                currentUser={currentUser}
+                employees={employees}
+                attendance={attendance}
+                leaves={leaves}
+                advances={advances}
+                salaries={salaries}
+                onRefresh={loadData}
+                onNavigate={setActiveTab}
+                onLogout={handleLogout}
+              />
+            </div>
           )}
         </main>
       </div>

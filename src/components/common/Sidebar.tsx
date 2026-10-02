@@ -78,7 +78,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'advances' as NavTab, label: 'بررسی مساعده‌ها', icon: Wallet, count: pendingAdvancesCount },
         { id: 'payroll' as NavTab, label: 'حقوق و دستمزد', icon: CreditCard, count: 0 },
         { id: 'reports' as NavTab, label: 'گزارشات آماری', icon: BarChart3, count: 0 },
-        { id: 'employee-portal' as NavTab, label: 'میز کار پرسنلی', icon: UserCheck, count: 0 },
         { id: 'settings' as NavTab, label: 'تنظیمات قوانین', icon: Settings, count: 0 },
       ];
     }
@@ -95,7 +94,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       { id: 'advances' as NavTab, label: 'مدیریت مساعده‌ها', icon: Wallet, count: pendingAdvancesCount },
       { id: 'payroll' as NavTab, label: 'محاسبه حقوق و دستمزد', icon: CreditCard, count: 0 },
       { id: 'reports' as NavTab, label: 'گزارشات و خروجی اکسل', icon: BarChart3, count: 0 },
-      { id: 'employee-portal' as NavTab, label: 'پرتال اختصاصی پرسنل', icon: UserCheck, count: 0 },
       { id: 'settings' as NavTab, label: 'تنظیمات و رهگیری وقایع', icon: Settings, count: 0 },
     ];
   };

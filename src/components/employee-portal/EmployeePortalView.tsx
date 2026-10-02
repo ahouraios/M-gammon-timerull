@@ -129,6 +129,13 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
   const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
   const [isExpenseHistoryModalOpen, setIsExpenseHistoryModalOpen] = useState(false);
 
+  // Mission Start Clock-In State (شروع به کار در مأموریت خارج از محیط کارگاه)
+  const [isMissionModalOpen, setIsMissionModalOpen] = useState(false);
+  const [missionDestination, setMissionDestination] = useState('');
+  const [missionDescription, setMissionDescription] = useState('');
+  const [isSubmittingMission, setIsSubmittingMission] = useState(false);
+  const [missionMsg, setMissionMsg] = useState<{ success: boolean; text: string } | null>(null);
+
   // Worker Password Change State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -212,6 +219,55 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
       }
     } catch {
       setBioStep('IDLE');
+    }
+  };
+
+  const handleStartMissionClockIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentEmployee) return;
+    if (!missionDestination.trim()) {
+      setMissionMsg({ success: false, text: 'لطفاً مقصد مأموریت را وارد کنید.' });
+      return;
+    }
+
+    setIsSubmittingMission(true);
+    setMissionMsg(null);
+
+    let coords: { lat: number; lng: number } | undefined = undefined;
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 5000,
+            maximumAge: 0,
+          });
+        });
+        coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      } catch {
+        // Continue if GPS timeout
+      }
+    }
+
+    const res = StorageService.clockInMission(
+      currentEmployee.id,
+      missionDestination,
+      missionDescription,
+      coords
+    );
+
+    setIsSubmittingMission(false);
+    if (res.success) {
+      setMissionMsg({ success: true, text: res.message });
+      setTimeout(() => {
+        setIsMissionModalOpen(false);
+        setMissionDestination('');
+        setMissionDescription('');
+        setMissionMsg(null);
+        onRefresh();
+      }, 1400);
+    } else {
+      setMissionMsg({ success: false, text: res.message });
     }
   };
 
@@ -541,10 +597,22 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
                 {isShiftCompleted
                   ? 'تردد امروز شما با موفقیت ثبت نهایی شد'
                   : isClockedIn
-                  ? `شما حاضر در کارگاه هستید (ورود: ${todayRecord?.checkInTime})`
+                  ? (todayRecord?.isMissionStart
+                      ? `شما در مأموریت کاری خارج از محیط کارگاه هستید (ورود: ${todayRecord?.checkInTime})`
+                      : `شما حاضر در کارگاه هستید (ورود: ${todayRecord?.checkInTime})`)
                   : 'شیفت امروز هنوز ثبت نشده'}
               </span>
             </h3>
+
+            {todayRecord?.isMissionStart && isClockedIn && !isShiftCompleted && (
+              <div className="flex items-center gap-2 text-xs text-indigo-900 bg-indigo-100/70 p-2.5 rounded-2xl border border-indigo-200">
+                <Briefcase className="w-4 h-4 text-indigo-700 shrink-0" />
+                <span>مأموریت اول وقت: <strong>{todayRecord.missionDestination}</strong></span>
+                {todayRecord.missionDescription && (
+                  <span className="text-indigo-600 text-[11px]">({todayRecord.missionDescription})</span>
+                )}
+              </div>
+            )}
 
             {isShiftCompleted ? (
               <div className="space-y-1.5 pt-1 text-xs">
@@ -603,15 +671,27 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
             {isClockedIn ? (
               <>
                 <LogOut className="w-5 h-5" />
-                <span>ثبت خروج با بارکد کارگاه</span>
+                <span>{todayRecord?.isMissionStart ? 'ثبت پایان مأموریت و خروج' : 'ثبت خروج با بارکد کارگاه'}</span>
               </>
             ) : (
               <>
                 <LogIn className="w-5 h-5" />
-                <span>ثبت ورود</span>
+                <span>ثبت ورود با بارکد کارگاه</span>
               </>
             )}
           </button>
+
+          {/* Mission Start Button (خارج از محیط کارگاه) */}
+          {!isClockedIn && (
+            <button
+              type="button"
+              onClick={() => setIsMissionModalOpen(true)}
+              className="w-full py-2.5 px-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-98"
+            >
+              <Briefcase className="w-4 h-4" />
+              <span>شروع کار اول وقت در مأموریت (خارج از محیط کارگاه)</span>
+            </button>
+          )}
 
           {/* Secondary Outline Button: Manual Punch */}
           <button
@@ -846,8 +926,14 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
 
       {/* INTERACTIVE BIOMETRIC FINGERPRINT MODAL */}
       {isBiometricModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 border border-slate-200 shadow-2xl text-center animate-in zoom-in-95">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsBiometricModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-sm w-full p-5 space-y-4 border border-slate-200 shadow-2xl text-center animate-in zoom-in-95 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
@@ -992,8 +1078,14 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
 
       {/* Manual Attendance Request Modal */}
       {isManualModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsManualModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <button
                 type="button"
@@ -1058,8 +1150,14 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
 
       {/* Password Change Modal */}
       {isPasswordModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsPasswordModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <button
                 type="button"
@@ -1136,8 +1234,14 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
 
       {/* Expense Modal (خرید با کارت شخصی) */}
       {isExpenseModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsExpenseModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <button
                 type="button"
@@ -1228,8 +1332,14 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
 
       {/* Expense History Modal */}
       {isExpenseHistoryModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right max-h-[85vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsExpenseHistoryModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right max-h-[85vh] overflow-y-auto cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <button
                 type="button"
@@ -1267,6 +1377,102 @@ export const EmployeePortalView: React.FC<EmployeePortalViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* START MISSION CLOCK-IN MODAL (شروع به کار اول وقت خارج از محیط کارگاه) */}
+      {isMissionModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setIsMissionModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 border border-slate-200 shadow-2xl animate-in zoom-in-95 text-right cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <button
+                type="button"
+                onClick={() => setIsMissionModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
+                <span>شروع به کار در مأموریت کاری</span>
+                <Briefcase className="w-4 h-4 text-indigo-600" />
+              </h3>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 text-indigo-900 text-xs leading-relaxed">
+              اگر کار روزانه خود را مستقیماً از بیرون کارگاه (خرید چوب/یراق، تحویل سفارش مشتری یا اداره) آغاز می‌کنید، می‌توانید با ثبت مقصد و موقعیت مکانی (GPS)، ورود خود را ثبت کنید.
+            </div>
+
+            {missionMsg && (
+              <div className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                missionMsg.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+              }`}>
+                <span>{missionMsg.text}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleStartMissionClockIn} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  مقصد / محل مأموریت: <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={missionDestination}
+                  onChange={(e) => setMissionDestination(e.target.value)}
+                  placeholder="مثال: بازار چوب خاوران، تحویل بار به مشتری، بانک ملی..."
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  توضیحات مأموریت (اختیاری):
+                </label>
+                <textarea
+                  rows={2}
+                  value={missionDescription}
+                  onChange={(e) => setMissionDescription(e.target.value)}
+                  placeholder="مثال: خرید ۲۰ ورق سنباده و چسب چوب به دستور مدیر..."
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                <MapPin className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span>موقعیت مکانی شما در لحظه ثبت با GPS هوشمند ذخیره می‌شود.</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsMissionModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingMission}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <Briefcase className="w-3.5 h-3.5" />
+                  <span>{isSubmittingMission ? 'در حال ثبت موقعیت و تردد...' : 'تأیید و ثبت آغاز به کار در مأموریت'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Developer Credit Footer */}
+      <div className="pt-8 pb-3 text-center">
+        <DeveloperBadge variant="footer" />
+      </div>
 
     </div>
   );

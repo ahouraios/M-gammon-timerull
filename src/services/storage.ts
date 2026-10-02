@@ -1012,8 +1012,9 @@ export class StorageService {
       return { success: false, message: `ورود شما قبلاً در ساعت ${existing.checkInTime} ثبت شده است.` };
     }
 
-    // Calculate late minutes
-    const [startH, startM] = shift.startTime.split(':').map(Number);
+    // Calculate late minutes based on custom employee hours or shift
+    const effectiveStartTime = (emp.customWorkHoursEnabled && emp.workStartTime) || shift.startTime || '07:00';
+    const [startH, startM] = effectiveStartTime.split(':').map(Number);
     const [curH, curM] = timeNow.split(':').map(Number);
     const expectedMinutes = startH * 60 + startM;
     const actualMinutes = curH * 60 + curM;
@@ -1062,6 +1063,87 @@ export class StorageService {
     return { success: true, message: `ورود با موفقیت در ساعت ${timeNow} ثبت شد.`, record: newRecord };
   }
 
+  // شروع به کار نیرو از ابتدای صبح خارج از محیط کار و بعنوان ماموریت
+  static clockInMission(
+    employeeId: string,
+    destination: string,
+    description?: string,
+    gpsCoords?: { lat: number; lng: number }
+  ): { success: boolean; message: string; record?: AttendanceRecord } {
+    const employees = this.getAllEmployeesRaw();
+    const emp = employees.find(e => e.id === employeeId);
+    if (!emp) return { success: false, message: 'پرسنل یافت نشد.' };
+    if (!destination || !destination.trim()) {
+      return { success: false, message: 'لطفاً مقصد یا شرح مأموریت اول وقت را وارد نمایید.' };
+    }
+
+    const settings = this.getSettings();
+    const today = getTodayShamsi();
+    const timeNow = getCurrentTimeStr();
+    const records = this.getAllAttendanceRaw();
+    const existing = records.find(r => r.employeeId === employeeId && r.date === today);
+
+    if (existing && existing.checkInTime) {
+      return { success: false, message: `ورود شما امروز قبلاً در ساعت ${existing.checkInTime} ثبت گردیده است.` };
+    }
+
+    const verifiedLocation = gpsCoords
+      ? { lat: gpsCoords.lat, lng: gpsCoords.lng, distanceMeters: 0 }
+      : undefined;
+
+    const newRecord: AttendanceRecord = {
+      id: `att_${Date.now()}`,
+      companyId: settings.id,
+      employeeId,
+      date: today,
+      checkInTime: timeNow,
+      checkOutTime: '',
+      workDurationMinutes: 0,
+      lateMinutes: 0,
+      earlyExitMinutes: 0,
+      overtimeMinutes: 0,
+      status: 'PRESENT',
+      checkInMethod: 'GPS',
+      approvalStatus: 'APPROVED',
+      isMissionStart: true,
+      isMission: true,
+      missionDestination: destination.trim(),
+      missionDescription: description?.trim() || undefined,
+      verifiedLocation,
+      notes: `شروع کار اول وقت در مأموریت خارج از شرکت: ${destination.trim()}`
+    };
+
+    const updatedRecords = existing
+      ? records.map(r => r.id === existing.id ? newRecord : r)
+      : [newRecord, ...records];
+
+    this.saveAttendance(updatedRecords);
+
+    // ثبت خودکار در سوابق مأموریت‌های روزانه
+    try {
+      this.submitWorkMission({
+        employeeId,
+        date: today,
+        startTime: timeNow,
+        endTime: (emp.customWorkHoursEnabled && emp.workEndTime) || '16:00',
+        destination: destination.trim(),
+        description: `شروع به کار در مأموریت خارج از محیط کارگاه - ${description?.trim() || 'بدون توضیح'}`
+      });
+    } catch {}
+
+    this.addAuditLog(
+      'ثبت مأموریت اول وقت',
+      'حضور و غیاب',
+      `شروع به کار در مأموریت: ${emp.firstName} ${emp.lastName} در ${destination.trim()} ساعت ${timeNow}`
+    );
+
+    return {
+      success: true,
+      message: `شروع به کار در مأموریت (${destination.trim()}) با موفقیت در ساعت ${timeNow} ثبت شد.`,
+      record: newRecord
+    };
+  }
+
   static clockOut(
     employeeId: string,
     method: AttendanceRecord['checkOutMethod'],
@@ -1091,7 +1173,9 @@ export class StorageService {
       const targetWs = assignedWs || { lat: settings.officeLat, lng: settings.officeLng, allowedRadiusMeters: 35, name: 'کارگاه' };
       const dist = calculateGpsDistanceMeters(gpsCoords.lat, gpsCoords.lng, targetWs.lat, targetWs.lng);
       const allowedRadius = targetWs.allowedRadiusMeters || 35;
-      if (dist > allowedRadius) {
+      
+      // اگر پرسنل در حال مأموریت یا شروع مأموریت بوده است، خطای محدوده کارگاه داده نشود
+      if (!existing.isMission && !existing.isMissionStart && dist > allowedRadius) {
         return {
           success: false,
           message: `فاصله شما از کارگاه اختصاص‌یافته (${targetWs.name}) ${dist} متر است. سقف مجاز ${allowedRadius} متر است.`
@@ -1108,7 +1192,9 @@ export class StorageService {
     const outTotalMins = outH * 60 + outM;
 
     // Check if out earlier than in (Fixes ATT-002 & ATT-003)
-    const isOvernight = shift.type === 'NIGHT' || (shift.startTime > shift.endTime);
+    const effectiveStartTime = (emp.customWorkHoursEnabled && emp.workStartTime) || shift.startTime;
+    const effectiveEndTime = (emp.customWorkHoursEnabled && emp.workEndTime) || shift.endTime;
+    const isOvernight = shift.type === 'NIGHT' || (effectiveStartTime > effectiveEndTime);
     let rawWorkedMins = 0;
 
     if (!isOvernight && outTotalMins < inTotalMins) {
@@ -1127,10 +1213,12 @@ export class StorageService {
     const breakDeduction = (rawWorkedMins >= 240 && shift.breakDurationMinutes) ? shift.breakDurationMinutes : 0;
     const netWorkedMins = Math.max(0, rawWorkedMins - breakDeduction);
 
-    // Thursday end time handling (Fixes ATT-004)
+    // Thursday end time handling or employee custom end time
     const now = new Date();
     const isThursday = now.getDay() === 4;
-    const scheduledEndTime = (isThursday && shift.thursdayEndTime) ? shift.thursdayEndTime : shift.endTime;
+    const scheduledEndTime = isThursday
+      ? (emp.thursdayEndTime || shift.thursdayEndTime || '13:00')
+      : (effectiveEndTime || '16:00');
     const [endH, endM] = scheduledEndTime.split(':').map(Number);
     const scheduledEndMinutes = endH * 60 + endM;
 
@@ -1857,6 +1945,10 @@ export class StorageService {
     current.unshift(newPayment);
     this.saveMiscPayments(current);
 
+    if (newPayment.deductFromSalary && newPayment.month) {
+      this.calculateSalaryForEmployee(newPayment.employeeId, newPayment.month);
+    }
+
     const formattedAmount = formatCurrencyTomans(newPayment.amount);
     this.addAuditLog(
       'ثبت پرداخت متفرقه',
@@ -1884,8 +1976,15 @@ export class StorageService {
   }
 
   static deleteMiscPayment(id: string): void {
-    const raw = this.getAllMiscPaymentsRaw().filter(p => p.id !== id);
+    const list = this.getAllMiscPaymentsRaw();
+    const target = list.find(p => p.id === id);
+    const raw = list.filter(p => p.id !== id);
     this.saveMiscPayments(raw);
+    
+    if (target?.deductFromSalary && target.month) {
+      this.calculateSalaryForEmployee(target.employeeId, target.month);
+    }
+
     const token = this.getAuthToken();
     if (token) {
       fetch(`/api/misc-payments/${id}`, {
@@ -1924,7 +2023,10 @@ export class StorageService {
 
     if (employeeId) {
       const emp = this.getAllEmployeesRaw().find(e => e.id === employeeId);
-      if (emp && emp.shiftId) {
+      if (emp && emp.customWorkHoursEnabled && emp.workStartTime && emp.workEndTime) {
+        shiftStart = emp.workStartTime;
+        shiftEnd = emp.workEndTime;
+      } else if (emp && emp.shiftId) {
         const shift = this.getShifts().find(s => s.id === emp.shiftId);
         if (shift && shift.startTime && shift.endTime) {
           shiftStart = shift.startTime;
@@ -2104,6 +2206,12 @@ export class StorageService {
       .filter(a => a.employeeId === employeeId && a.status === 'APPROVED' && (a.repayMonth?.replace(/-/g, '/') === normMonth))
       .reduce((sum, a) => sum + a.amount, 0);
 
+    const discretionaryAdvances = bonusesPenalties
+      .filter(b => b.employeeId === employeeId && (b.type === 'DISCRETIONARY_ADVANCE' || (b as any).type === 'EXTRA_ADVANCE') && (b.month?.replace(/-/g, '/') === normMonth))
+      .reduce((sum, b) => sum + b.amount, 0);
+
+    const totalAdvances = approvedAdvances + discretionaryAdvances;
+
     const bonuses = bonusesPenalties
       .filter(b => b.employeeId === employeeId && b.type === 'BONUS' && (b.month?.replace(/-/g, '/') === normMonth))
       .reduce((sum, b) => sum + b.amount, 0);
@@ -2135,7 +2243,7 @@ export class StorageService {
     const taxDeduction = Math.round(taxableBase * ((settings.taxRatePercent || 10) / 100));
     const netSalary = Math.max(
       0,
-      grossSalary - insuranceDeduction - taxDeduction - penalties - approvedAdvances - miscDeductions + approvedExpensesToSalary
+      grossSalary - insuranceDeduction - taxDeduction - penalties - totalAdvances - miscDeductions + approvedExpensesToSalary
     );
 
     const record: SalaryRecord = {
@@ -2150,7 +2258,8 @@ export class StorageService {
       overtimeAmount,
       bonusesTotal: bonuses,
       penaltiesTotal: penalties,
-      advancesTotal: approvedAdvances,
+      advancesTotal: totalAdvances,
+      discretionaryAdvancesTotal: discretionaryAdvances,
       personalCardExpensesTotal: approvedExpensesToSalary,
       miscDeductionsTotal: miscDeductions,
       housingAllowance: housing,
@@ -2252,10 +2361,94 @@ export class StorageService {
     this.addAuditLog('حذف شیفت', 'تنظیمات', `شیفت کاری با شناسه ${shiftId} حذف شد.`);
   }
 
-  static addBonusOrPenalty(bp: BonusOrPenalty): void {
-    const list = getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, initialBonusesPenalties);
-    setItem(STORAGE_KEYS.BONUSES, [bp, ...list]);
-    this.addAuditLog('پاداش و جریمه', 'حقوق و دستمزد', `${bp.type === 'BONUS' ? 'پاداش' : 'جریمه'} به مبلغ ${bp.amount} ثبت شد.`);
+  static getAllBonusesPenaltiesRaw(): BonusOrPenalty[] {
+    return getItem<BonusOrPenalty[]>(STORAGE_KEYS.BONUSES, initialBonusesPenalties);
+  }
+
+  static saveBonusesPenalties(list: BonusOrPenalty[]): void {
+    setItem(STORAGE_KEYS.BONUSES, list);
+  }
+
+  static getBonusesAndPenalties(requestingUser?: User): BonusOrPenalty[] {
+    const list = this.getAllBonusesPenaltiesRaw();
+    const user = requestingUser || this.getCurrentUser();
+    if (!user) return [];
+    if (user.role === 'EMPLOYEE' && user.employeeId) {
+      return list.filter(b => b.employeeId === user.employeeId);
+    }
+    return list;
+  }
+
+  static addBonusOrPenalty(bp: Omit<BonusOrPenalty, 'id'> & { id?: string }): { success: boolean; message: string; record: BonusOrPenalty } {
+    const list = this.getAllBonusesPenaltiesRaw();
+    const settings = this.getSettings();
+    const id = bp.id || `bp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const record: BonusOrPenalty = {
+      ...bp,
+      id,
+      companyId: bp.companyId || settings.id,
+      amount: Math.round(Number(bp.amount)),
+    };
+    const updated = [record, ...list];
+    this.saveBonusesPenalties(updated);
+
+    const emp = this.getAllEmployeesRaw().find(e => e.id === record.employeeId);
+    const empName = emp ? `${emp.firstName} ${emp.lastName}` : record.employeeId;
+    const typeLabel = record.type === 'BONUS'
+      ? 'پاداش تشویقی'
+      : record.type === 'DISCRETIONARY_ADVANCE'
+      ? 'مساعده خارج از چارچوب'
+      : 'جریمه انضباطی';
+    this.addAuditLog(
+      typeLabel,
+      'حقوق و دستمزد',
+      `ثبت ${typeLabel} به مبلغ ${formatCurrencyTomans(record.amount)} برای ${empName} (${record.title})`
+    );
+
+    const token = this.getAuthToken();
+    if (token) {
+      fetch('/api/bonuses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(record)
+      }).catch(err => console.warn('Server sync error for bonus/penalty:', err));
+    }
+
+    if (record.month) {
+      this.calculateSalaryForEmployee(record.employeeId, record.month);
+    }
+
+    return {
+      success: true,
+      message: `${typeLabel} با موفقیت ثبت شد و در فیش حقوقی دوره محاسبه گردید.`,
+      record
+    };
+  }
+
+  static deleteBonusOrPenalty(id: string): { success: boolean; message: string } {
+    const list = this.getAllBonusesPenaltiesRaw();
+    const target = list.find(b => b.id === id);
+    if (!target) return { success: false, message: 'مورد یافت نشد.' };
+
+    const updated = list.filter(b => b.id !== id);
+    this.saveBonusesPenalties(updated);
+
+    const token = this.getAuthToken();
+    if (token) {
+      fetch(`/api/bonuses/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      }).catch(err => console.warn('Server sync error deleting bonus/penalty:', err));
+    }
+
+    if (target.month) {
+      this.calculateSalaryForEmployee(target.employeeId, target.month);
+    }
+
+    return { success: true, message: 'رکورد با موفقیت حذف شد و محاسبات حقوق به‌روزرسانی گردید.' };
   }
 
   // Export Full Backup strictly for Super Admin (Fixes BACKUP-001 & BACKUP-002)

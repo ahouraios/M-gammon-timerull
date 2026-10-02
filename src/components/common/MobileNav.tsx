@@ -104,7 +104,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({
         { id: 'advances' as NavTab, label: 'بررسی مساعده‌ها', icon: Wallet, badge: pendingAdvancesCount },
         { id: 'payroll' as NavTab, label: 'حقوق و دستمزد', icon: CreditCard },
         { id: 'reports' as NavTab, label: 'گزارشات آماری', icon: BarChart3 },
-        { id: 'employee-portal' as NavTab, label: 'میز کار پرسنلی من', icon: UserCheck },
         { id: 'settings' as NavTab, label: 'تنظیمات قوانین', icon: Settings },
       ];
     }
@@ -120,7 +119,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       { id: 'advances' as NavTab, label: 'مدیریت مساعده‌ها', icon: Wallet, badge: pendingAdvancesCount },
       { id: 'payroll' as NavTab, label: 'محاسبه حقوق و دستمزد', icon: CreditCard },
       { id: 'reports' as NavTab, label: 'گزارشات و خروجی اکسل', icon: BarChart3 },
-      { id: 'employee-portal' as NavTab, label: 'پرتال اختصاصی پرسنل', icon: UserCheck },
       { id: 'settings' as NavTab, label: 'تنظیمات و لاگ وقایع', icon: Settings },
     ];
   };
